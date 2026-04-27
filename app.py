@@ -383,7 +383,7 @@ APP_JS = """
 })();
 """
 
-with gr.Blocks(css=APP_CSS) as demo:
+with gr.Blocks() as demo:
 
     state = gr.State(Board())
     status_state = gr.State("")
@@ -488,7 +488,7 @@ with gr.Blocks(css=APP_CSS) as demo:
 # ====== RUN ======
 
 def run_app():
-    demo.launch(js=APP_JS, footer_links=["api"])
+    demo.launch(js=APP_JS, css = APP_CSS, footer_links=["api"])
 
 
 if __name__ == "__main__":
