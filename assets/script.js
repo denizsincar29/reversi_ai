@@ -194,6 +194,7 @@
     let isProcessing = false;
     let localErrorPlayed = false;
     let lastProcessedTs = 0;
+    let humanMovePlayedOptimistically = false;
 
     function syncFromUI() {
         const buttons = getBoardButtons();
@@ -283,6 +284,7 @@
             if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
                 // Block UI for valid moves until server syncs
                 isProcessing = true;
+                humanMovePlayedOptimistically = true;
                 console.log("Move is valid locally, applying optimistic update.");
                 localErrorPlayed = false;
                 const result = Reversi.applyMove(localGrid, humanColor, r, c);
@@ -343,9 +345,11 @@
             for (const move of moves) {
                 console.log(`Replaying move: ${move.type} for ${move.player}`);
                 if (move.type === 'move') {
-                    // Skip if it's our move and we already played it optimistically
-                    // But if it's AI or assistant move, we play it.
-                    if (move.player !== humanColor || !isProcessing) {
+                    // Only skip if it's the human's color AND we specifically flagged it as optimistically played.
+                    // This ensures AI Assistant moves (which are human color but not optimistic) always play.
+                    const isOptimisticHumanMove = (move.player === humanColor && humanMovePlayedOptimistically);
+
+                    if (!isOptimisticHumanMove) {
                         console.log(`Playing move sound for ${move.player} at (${move.r}, ${move.c})`);
                         await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
                         await new Promise(resolve => setTimeout(resolve, 300));
@@ -369,7 +373,8 @@
         } finally {
             isProcessing = false;
             localErrorPlayed = false;
-            console.log("Metadata processing complete, isProcessing reset.");
+            humanMovePlayedOptimistically = false;
+            console.log("Metadata processing complete, flags reset.");
         }
     }
 
