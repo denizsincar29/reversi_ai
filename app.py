@@ -29,7 +29,9 @@ def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
     legal_html, _ = board.get_legal_moves_info(board.turn)
 
     # Use a div with data-attribute for more reliable JS access
-    metadata_html = f"<div id='move-metadata' data-payload='{json.dumps(moves_metadata)}'></div>"
+    # Use json.dumps twice to escape it properly for the HTML attribute
+    escaped_metadata = json.dumps(moves_metadata).replace("'", "&apos;")
+    metadata_html = f"<div id='move-metadata' data-payload='{escaped_metadata}'></div>"
 
     return [
         board,

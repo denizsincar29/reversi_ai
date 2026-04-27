@@ -112,12 +112,16 @@
         async playMoveSequence(player, r, c, flips) {
             this.play('disk.wav', r, c);
             const sound = player === 'W' ? 'white.wav' : 'black.wav';
+            const totalWait = (flips.length + 1) * 120;
+
             for (let i = 0; i < flips.length; i++) {
                 const [fr, fc] = flips[i];
                 setTimeout(() => {
                     this.play(sound, fr, fc);
                 }, (i + 1) * 120);
             }
+
+            return new Promise(resolve => setTimeout(resolve, totalWait + 100));
         }
     };
 
@@ -125,6 +129,7 @@
     let localGrid = Array(SIZE).fill(null).map(() => Array(SIZE).fill('.'));
     let humanColor = 'B';
     let isProcessing = false;
+    let localErrorPlayed = false;
 
     function syncFromUI() {
         const buttons = getBoardButtons();
@@ -137,10 +142,12 @@
             localGrid[r][c] = piece === 'black' ? 'B' : (piece === 'white' ? 'W' : '.');
         });
 
+        // Gradio Radio labels for Color: "Black", "White"
+        // But values are "B", "W". The radio buttons should have value attributes.
         const colorInput = document.querySelector('input[name="radio-option-your-color"]:checked');
         if (colorInput) {
-            const val = colorInput.value;
-            humanColor = val === 'Black' ? 'B' : (val === 'White' ? 'W' : 'B');
+            // Gradio Radio values are B and W
+            humanColor = colorInput.value;
         }
     }
 
@@ -167,7 +174,11 @@
                 }
                 btn.setAttribute('data-piece', newPiece);
             }
-            btn.setAttribute('aria-label', text);
+            // Avoid setting aria-label if not changed to prevent observer cycles
+            const newAria = text;
+            if (btn.getAttribute('aria-label') !== newAria) {
+                btn.setAttribute('aria-label', newAria);
+            }
         });
         syncFromUI();
     }
@@ -193,10 +204,13 @@
         const c = index % SIZE;
 
         if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
+            isProcessing = true;
+            localErrorPlayed = false;
             const result = Reversi.applyMove(localGrid, humanColor, r, c);
             localGrid = result.grid;
 
-            AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
+            // Play sound locally (optimistic)
+            await AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
 
             const buttons = getBoardButtons();
             buttons[index].setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
@@ -207,10 +221,9 @@
                 flipBtn.classList.add('flipping');
                 flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
             });
-
-            isProcessing = true;
         } else if (localGrid[r][c] === '.') {
             AudioEngine.play('error.wav', r, c);
+            localErrorPlayed = true;
         }
     }
 
@@ -223,30 +236,28 @@
             return;
         }
 
-        isProcessing = false;
-
-        let delay = 0;
+        // Replay AI moves sequentially
         for (const move of metadata) {
             if (move.player === humanColor && move.type === 'move') {
                 continue;
             }
 
-            setTimeout(() => {
-                if (move.type === 'move') {
-                    AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
-                } else if (move.type === 'pass') {
-                    AudioEngine.play('pass.wav');
-                } else if (move.type === 'error' && move.player === humanColor) {
+            if (move.type === 'move') {
+                await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
+                await new Promise(resolve => setTimeout(resolve, 300)); // Gap between moves
+            } else if (move.type === 'pass') {
+                AudioEngine.play('pass.wav');
+                await new Promise(resolve => setTimeout(resolve, 600));
+            } else if (move.type === 'error' && move.player === humanColor) {
+                if (!localErrorPlayed) {
                     AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
                 }
-            }, delay);
-
-            if (move.type === 'move') {
-                delay += 1000;
-            } else if (move.type === 'pass') {
-                delay += 500;
+                localErrorPlayed = false;
             }
         }
+
+        isProcessing = false;
+        localErrorPlayed = false;
     }
 
     function hookKeyboardNav() {
@@ -311,25 +322,41 @@
         });
 
         const observer = new MutationObserver((mutations) => {
-            updatePieceDataAttributes();
-        });
+            let boardChanged = false;
+            let metadataChanged = false;
 
-        const metadataPoll = setInterval(() => {
-            const metaElem = document.getElementById('move-metadata');
-            if (metaElem) {
-                const currentMeta = metaElem.getAttribute('data-payload');
-                if (currentMeta && currentMeta !== window.__lastMeta) {
-                    window.__lastMeta = currentMeta;
-                    handleMetadataUpdate(currentMeta);
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList' || mutation.type === 'characterData') {
+                    // Check if mutation is within the board
+                    if (mutation.target.closest && mutation.target.closest('#board-container')) {
+                        boardChanged = true;
+                    }
+                    // Check if mutation is the metadata container
+                    if (mutation.target.id === 'move-metadata-container' ||
+                        (mutation.target.parentElement && mutation.target.parentElement.id === 'move-metadata-container')) {
+                        metadataChanged = true;
+                    }
                 }
             }
-        }, 100);
+
+            if (boardChanged) updatePieceDataAttributes();
+            if (metadataChanged) {
+                const metaElem = document.getElementById('move-metadata');
+                if (metaElem) {
+                    const currentMeta = metaElem.getAttribute('data-payload');
+                    if (currentMeta && currentMeta !== window.__lastMeta) {
+                        window.__lastMeta = currentMeta;
+                        handleMetadataUpdate(currentMeta);
+                    }
+                }
+            }
+        });
 
         observer.observe(document.body, {
             childList: true,
             subtree: true,
-            characterData: true,
-            attributes: true
+            characterData: true
+            // attributes: false to avoid loops
         });
 
         window.setTimeout(updatePieceDataAttributes, 500);
