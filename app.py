@@ -2,9 +2,9 @@
 
 import gradio as gr
 from reversi import Board
-from audio import audio as audio_manager
 import logic
 import os
+import json
 
 # ====== ASSET LOADING ======
 
@@ -21,15 +21,22 @@ GR_MARKDOWN = load_asset("info.md")
 
 # ====== UI HELPERS ======
 
-def _build_ui_payload(board: Board, status_text: str):
+def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
+    if moves_metadata is None:
+        moves_metadata = []
     final_status = logic.compose_status(board, status_text)
     adv_html, _ = board.get_advantage_info()
     legal_html, _ = board.get_legal_moves_info(board.turn)
 
+    # Use a div with data-attribute for more reliable JS access
+    # Use json.dumps twice to escape it properly for the HTML attribute
+    escaped_metadata = json.dumps(moves_metadata).replace("'", "&apos;")
+    metadata_html = f"<div id='move-metadata' data-payload='{escaped_metadata}'></div>"
+
     return [
         board,
         final_status,
-        audio_manager.get_audio_bytes(),
+        metadata_html,
         final_status,
         board.get_screenreader_text(final_status),
         logic.announce_to_screenreader(final_status),
@@ -39,8 +46,8 @@ def _build_ui_payload(board: Board, status_text: str):
     ]
 
 def handle_turn(board, r, c, human_color, ai_type, ai_depth):
-    new_board, status = logic.process_turn(board, r, c, human_color, ai_type, ai_depth)
-    return _build_ui_payload(new_board, status)
+    new_board, status, metadata = logic.process_turn(board, r, c, human_color, ai_type, ai_depth)
+    return _build_ui_payload(new_board, status, metadata)
 
 def handle_assist(board, assist_type, assist_depth, ai_type, ai_depth, human_color):
     if board.turn != human_color:
@@ -58,7 +65,6 @@ def handle_assist(board, assist_type, assist_depth, ai_type, ai_depth, human_col
     return handle_turn(board, move[0], move[1], human_color, ai_type, ai_depth)
 
 def handle_new_game(human_color, ai_type, ai_depth):
-    audio_manager.clear()
     board = Board()
     if human_color == 'W':
         return handle_turn(board, -1, -1, human_color, ai_type, ai_depth)
@@ -124,13 +130,13 @@ with gr.Blocks() as demo:
             gr.Markdown("### Accessibility\nHotkeys: Alt+A announces advantage, Alt+L announces legal moves. Use arrow keys to navigate the board.")
 
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)
-    audio_output = gr.Audio(autoplay=True, interactive=False, label="", visible=False)
+    move_metadata_view = gr.HTML(visible=False, elem_id="move-metadata-container")
 
     flat_buttons = [btn for row in buttons for btn in row]
     event_outputs = [
         state,              # 0
         status_state,       # 1
-        audio_output,       # 2
+        move_metadata_view, # 2
         status,             # 3
         sr_text,            # 4
         sr_announcement,    # 5
@@ -166,4 +172,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(css=APP_CSS, js=APP_JS)
+    demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=["sounds"])
