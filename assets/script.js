@@ -74,7 +74,7 @@
         async init() {
             if (this.ctx) {
                 if (this.ctx.state === 'suspended') {
-                    await this.ctx.resume();
+                    await this.ctx.resume().catch(console.warn);
                 }
                 return;
             }
@@ -87,8 +87,9 @@
 
             const loadPromises = this.sounds.map(async (sound) => {
                 try {
-                    // Use a more robust path
-                    const url = window.location.origin + window.location.pathname + `file=sounds/${sound}`;
+                    // Use a more robust path, ensuring correct slash separator
+                    const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
+                    const url = window.location.origin + base + `file=sounds/${sound}`;
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`Status ${response.status}`);
 
@@ -114,7 +115,7 @@
             if (!this.ctx || !this.buffers[soundName]) return;
 
             if (this.ctx.state === 'suspended') {
-                await this.ctx.resume();
+                await this.ctx.resume().catch(console.warn);
             }
 
             const source = this.ctx.createBufferSource();
@@ -228,7 +229,7 @@
     async function handleCellClick(btn, index) {
         if (isProcessing) return;
         if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
-            await AudioEngine.ctx.resume();
+            await AudioEngine.ctx.resume().catch(console.warn);
         }
         await AudioEngine.init();
 

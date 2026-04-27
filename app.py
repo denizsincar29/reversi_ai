@@ -174,6 +174,7 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    # Use absolute path for allowed_paths to be safer
-    sounds_path = os.path.abspath("sounds")
+    # Resolve sounds directory relative to the file location
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    sounds_path = os.path.join(base_dir, "sounds")
     demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=[sounds_path])
