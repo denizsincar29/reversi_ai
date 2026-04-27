@@ -75,7 +75,7 @@
         async init() {
             if (this.initPromise) return this.initPromise;
 
-            this.initPromise = (async () => {
+            const doInit = async () => {
                 if (this.ctx) {
                     if (this.ctx.state === 'suspended') {
                         await this.ctx.resume().catch(console.warn);
@@ -90,40 +90,40 @@
                 }
 
                 const loadPromises = this.sounds.map(async (sound) => {
-                try {
-                    // Use a more robust path, ensuring correct slash separator
-                    // In Gradio 6+, files are served under /gradio_api/file=... or /file=...
-                    const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
+                    try {
+                        // Use a more robust path, ensuring correct slash separator
+                        // In Gradio 6+, files are served under /gradio_api/file=... or /file=...
+                        const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
 
-                    let url = window.location.origin + base + `gradio_api/file=sounds/${sound}`;
-                    let response = await fetch(url);
+                        let url = window.location.origin + base + `gradio_api/file=sounds/${sound}`;
+                        let response = await fetch(url);
 
-                    if (!response.ok) {
-                        // Fallback to /file=...
-                        url = window.location.origin + base + `file=sounds/${sound}`;
-                        response = await fetch(url);
+                        if (!response.ok) {
+                            // Fallback to /file=...
+                            url = window.location.origin + base + `file=sounds/${sound}`;
+                            response = await fetch(url);
+                        }
+                        if (!response.ok) throw new Error(`Status ${response.status}`);
+
+                        const contentType = response.headers.get("content-type");
+                        if (contentType && contentType.includes("text/html")) {
+                            throw new Error("Received HTML instead of audio. Check if path is correct.");
+                        }
+
+                        const arrayBuffer = await response.arrayBuffer();
+                        if (arrayBuffer.byteLength < 100) {
+                            throw new Error("Received too small buffer, likely not a valid audio file.");
+                        }
+                        this.buffers[sound] = await this.ctx.decodeAudioData(arrayBuffer);
+                    } catch (e) {
+                        console.error(`Failed to load sound: ${sound}`, e);
                     }
-                    if (!response.ok) throw new Error(`Status ${response.status}`);
+                });
+                await Promise.all(loadPromises);
+            };
 
-                    const contentType = response.headers.get("content-type");
-                    if (contentType && contentType.includes("text/html")) {
-                        throw new Error("Received HTML instead of audio. Check if path is correct.");
-                    }
-
-                    const arrayBuffer = await response.arrayBuffer();
-                    if (arrayBuffer.byteLength < 100) {
-                        throw new Error("Received too small buffer, likely not a valid audio file.");
-                    }
-                    this.buffers[sound] = await this.ctx.decodeAudioData(arrayBuffer);
-                } catch (e) {
-                    console.error(`Failed to load sound: ${sound}`, e);
-                }
-            });
-            await Promise.all(loadPromises);
-            }).finally(() => {
-                // Keep the promise if it succeeded, or clear it if we want to retry.
-                // For now, let's just keep it to avoid multiple init cycles.
-            });
+            this.initPromise = doInit();
+            this.initPromise.then(() => {}, () => {}); // Handle rejection to avoid unhandled promise rejections
             return this.initPromise;
         },
 
