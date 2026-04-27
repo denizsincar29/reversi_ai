@@ -140,9 +140,13 @@ class Board:
         for r in range(SIZE):
             cells = []
             for c in range(SIZE):
-                piece = self.grid[r][c]
-                symbol = "" if piece == "." else piece
-                cells.append(f'<td class="cell cell-{piece}">{symbol}</td>')
+                piece_char = self.grid[r][c]
+                piece_name = self.piece_name(piece_char)
+                if piece_char != ".":
+                    content = f'<div class="disk disk-{piece_name}"></div>'
+                else:
+                    content = ""
+                cells.append(f'<td class="cell">{content}</td>')
             rows.append(f"<tr>{''.join(cells)}</tr>")
         return "<table class='board-grid' aria-label='Reversi board'>" + "".join(rows) + "</table>"
 

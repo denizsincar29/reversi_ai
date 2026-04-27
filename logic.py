@@ -108,11 +108,13 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
             if flip_count > 0:
                 ai_status += f" and flipped {flip_count} disk{'s' if flip_count != 1 else ''}"
 
-            # Special message if human has no moves next
-            if not new_board.legal_moves(human_color) and not new_board.is_terminal():
-                ai_status += f", you have no legal moves, press on any square to pass"
-
             status_parts.append(ai_status)
             board = new_board
+
+            # If human has no moves, pass back to AI to continue the loop
+            if not board.legal_moves(human_color) and not board.is_terminal():
+                status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed, you have no legal moves, press on any square to pass")
+                audio_manager.pass_sound()
+                board.turn = ai_color
 
     return board, ". ".join(status_parts)
