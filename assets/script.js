@@ -88,9 +88,17 @@
             const loadPromises = this.sounds.map(async (sound) => {
                 try {
                     // Use a more robust path, ensuring correct slash separator
+                    // In Gradio 6+, files are served under /gradio_api/file=... or /file=...
                     const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-                    const url = window.location.origin + base + `file=sounds/${sound}`;
-                    const response = await fetch(url);
+
+                    let url = window.location.origin + base + `gradio_api/file=sounds/${sound}`;
+                    let response = await fetch(url);
+
+                    if (!response.ok) {
+                        // Fallback to /file=...
+                        url = window.location.origin + base + `file=sounds/${sound}`;
+                        response = await fetch(url);
+                    }
                     if (!response.ok) throw new Error(`Status ${response.status}`);
 
                     const contentType = response.headers.get("content-type");
