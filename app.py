@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
 
-import io
-
 import gradio as gr
-from pydub import AudioSegment as seg
 from reversi import Board, AlphaBetaPlayer
-import wipwip
+import audio
 
 
 # ====== INIT ======
@@ -17,29 +14,6 @@ ai = AlphaBetaPlayer(depth=3)
 
 def new_game():
     return Board(), "New game started", None
-
-
-def _concat_audio(clips, gap_ms=350):
-    combined = seg.silent(0)
-    first = True
-
-    for clip in clips:
-        if not clip:
-            continue
-
-        if not first:
-            combined += seg.silent(gap_ms)
-        first = False
-
-        segment = seg.from_file(io.BytesIO(clip), format="wav")
-        combined += segment
-
-    if len(combined) == 0:
-        return None
-
-    buffer = io.BytesIO()
-    combined.export(buffer, format="wav")
-    return buffer.getvalue()
 
 
 def _coord_label(row, col):
@@ -93,11 +67,11 @@ def player_move(board: Board, row, col):
     coord = _coord_label(row, col)
 
     if (row, col) not in moves:
-        return board, f"Invalid move at {coord}", wipwip.error(col, row), False
+        return board, f"Invalid move at {coord}", audio.error(col, row), False
 
     new_board = board.apply_move(player, (row, col))
     changed = _changed_to_player(board, new_board, player)
-    sound = wipwip.disk_wipwip(is_white=False, coords=changed)
+    sound = audio.disk_wipwip(is_white=False, coords=changed)
     flip_count = len(changed) - 1  # exclude the placed disk itself
 
     status_msg = f"You put black disk on {coord}"
@@ -114,11 +88,11 @@ def handle_turn(board: Board, row, col):
     coord = _coord_label(row, col)
 
     if (row, col) not in board.legal_moves(player):
-        return board, f"Invalid move at {coord}", wipwip.error(col, row)
+        return board, f"Invalid move at {coord}", audio.error(col, row)
 
     player_board = board.apply_move(player, (row, col))
     player_changed = _changed_to_player(board, player_board, player)
-    player_audio = wipwip.disk_wipwip(is_white=False, coords=player_changed)
+    player_audio = audio.disk_wipwip(is_white=False, coords=player_changed)
     player_flip_count = len(player_changed) - 1
 
     status_parts = [f"You put black disk on {coord}"]
@@ -129,12 +103,12 @@ def handle_turn(board: Board, row, col):
     ai_moves = player_board.legal_moves(ai_player)
     if not ai_moves:
         status_parts.append("AI pass")
-        return player_board, ". ".join(status_parts), _concat_audio([player_audio, wipwip.pass_sound()])
+        return player_board, ". ".join(status_parts), audio.concat_audio([player_audio, audio.pass_sound()])
 
     ai_move_pos = ai.choose_move(player_board, ai_player)
     ai_board = player_board.apply_move(ai_player, ai_move_pos)
     ai_changed = _changed_to_player(player_board, ai_board, ai_player)
-    ai_audio = wipwip.disk_wipwip(is_white=True, coords=ai_changed)
+    ai_audio = audio.disk_wipwip(is_white=True, coords=ai_changed)
     ai_flip_count = len(ai_changed) - 1
 
     ai_coord = _coord_label(ai_move_pos[0], ai_move_pos[1])
@@ -143,7 +117,7 @@ def handle_turn(board: Board, row, col):
         ai_status += f" and flipped {ai_flip_count} disk{'s' if ai_flip_count != 1 else ''}"
     status_parts.append(ai_status)
 
-    return ai_board, ". ".join(status_parts), _concat_audio([player_audio, ai_audio])
+    return ai_board, ". ".join(status_parts), audio.concat_audio([player_audio, ai_audio])
 
 
 # ====== UI HELPERS ======
@@ -245,7 +219,7 @@ APP_JS = """
 })();
 """
 
-with gr.Blocks(js=APP_JS) as demo:
+with gr.Blocks() as demo:
 
     state = gr.State(Board())
     status_state = gr.State("")
@@ -260,7 +234,7 @@ with gr.Blocks(js=APP_JS) as demo:
     status = gr.Textbox(label="Status", value="")
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)
 
-    audio = gr.Audio(autoplay=True, interactive=False, show_download_button=False, label="")
+    audio = gr.Audio(autoplay=True, interactive=False, label="")
 
     # координаты клика
     click_row = gr.Number(visible=False)
@@ -362,7 +336,7 @@ with gr.Blocks(js=APP_JS) as demo:
 # ====== RUN ======
 
 def run_app():
-    demo.launch(footer_links=["api"])
+    demo.launch(js=APP_JS, footer_links=["api"])
 
 
 if __name__ == "__main__":
