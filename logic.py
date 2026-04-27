@@ -60,11 +60,16 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
         legal_moves = board.legal_moves(human_color)
 
         if not legal_moves:
-            # Player must pass
+            # This should ideally be handled by the loop if we want consistency,
+            # but we keep it here for the immediate response.
             status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed")
             audio_manager.pass_sound()
             board.turn = board.other(human_color)
         else:
+            if r == -1 or c == -1:
+                # This happens during handle_new_game or similar calls
+                return board, "Your turn. " + status_text if status_text else "Your turn."
+
             if (r, c) not in legal_moves:
                 audio_manager.error(c, r)
                 return board, f"Invalid move at {Board.coord_label(r, c)}"
@@ -113,7 +118,7 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
 
             # If human has no moves, pass back to AI to continue the loop
             if not board.legal_moves(human_color) and not board.is_terminal():
-                status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed, you have no legal moves, press on any square to pass")
+                status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed (no legal moves)")
                 audio_manager.pass_sound()
                 board.turn = ai_color
 

@@ -1,7 +1,39 @@
 (() => {
+    /**
+     * Updates the data-piece attribute of buttons based on their text content
+     * to trigger CSS animations.
+     */
+    function updatePieceDataAttributes() {
+        const buttons = getBoardButtons();
+        buttons.forEach(btn => {
+            const text = (btn.textContent || '').trim().toLowerCase();
+            let newPiece = '';
+            if (text.includes('black')) {
+                newPiece = 'black';
+            } else if (text.includes('white')) {
+                newPiece = 'white';
+            } else {
+                newPiece = 'empty';
+            }
+
+            const oldPiece = btn.getAttribute('data-piece');
+            if (oldPiece !== newPiece) {
+                // If it was white and now black, or vice versa, it's a flip
+                if ((oldPiece === 'white' && newPiece === 'black') ||
+                    (oldPiece === 'black' && newPiece === 'white')) {
+                    btn.classList.remove('flipping');
+                    void btn.offsetWidth; // trigger reflow
+                    btn.classList.add('flipping');
+                }
+                btn.setAttribute('data-piece', newPiece);
+            }
+            btn.setAttribute('aria-label', text);
+        });
+    }
+
     function getBoardButtons() {
         return Array.from(document.querySelectorAll('button')).filter((b) =>
-            /^[A-H][1-8] (black|white|empty)$/.test((b.textContent || '').trim())
+            b.classList.contains('board-cell') || /^[A-H][1-8] (black|white|empty)$/i.test((b.textContent || '').trim())
         );
     }
 
@@ -50,7 +82,7 @@
             if (e.key === 'ArrowUp' && focusedIdx >= cols) nextIdx = focusedIdx - cols;
             else if (e.key === 'ArrowDown' && focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
             else if (e.key === 'ArrowLeft' && focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
-            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
+            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + cols === buttons.length ? focusedIdx : focusedIdx + 1;
             else return;
 
             e.preventDefault();
@@ -58,25 +90,22 @@
         });
 
         document.addEventListener('click', function(e) {
-            if (e.target && e.target.matches('button')) {
+            if (e.target && e.target.matches('button.board-cell')) {
                 e.target.focus();
             }
         });
 
-        const observer = new MutationObserver(() => {
-            const buttons = getBoardButtons();
-            if (buttons.length && document.activeElement === document.body) {
-                buttons[0].focus();
-            }
+        const observer = new MutationObserver((mutations) => {
+            updatePieceDataAttributes();
         });
-        observer.observe(document.body, { childList: true, subtree: true });
 
-        window.setTimeout(() => {
-            const buttons = getBoardButtons();
-            if (buttons.length) {
-                buttons[0].focus();
-            }
-        }, 250);
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+
+        window.setTimeout(updatePieceDataAttributes, 500);
     }
 
     hookKeyboardNav();
