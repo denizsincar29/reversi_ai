@@ -17,6 +17,9 @@ class AudioManager:
     STEP = 1000
     SOUNDS_DIR = Path(__file__).resolve().parent / "sounds"
     
+    def __init__(self):
+        self._collected = []
+
     def _pitch(self, sound, freq):
         """Change the pitch of a sound by resampling."""
         return sound._spawn(sound.raw_data, overrides={"frame_rate": freq})
@@ -53,21 +56,29 @@ class AudioManager:
     # PUBLIC METHODS
     # ==================
     
-    def concat_audio(self, clips, gap_ms=350):
+    def clear(self):
+        """Clear collected audio clips."""
+        self._collected = []
+
+    def add_clip(self, clip_bytes):
+        """Add raw audio bytes to the collection."""
+        if clip_bytes:
+            self._collected.append(clip_bytes)
+
+    def get_audio_bytes(self, gap_ms=350):
         """
-        Concatenate multiple audio clips with gaps between them.
-        
-        Args:
-            clips: List of audio byte data
-            gap_ms: Gap in milliseconds between clips (default: 350ms)
+        Concatenate all collected audio clips and clear the collection.
         
         Returns:
             Combined audio as bytes, or None if no clips
         """
+        if not self._collected:
+            return None
+
         combined = seg.silent(0)
         first = True
 
-        for clip in clips:
+        for clip in self._collected:
             if not clip:
                 continue
 
@@ -78,6 +89,8 @@ class AudioManager:
             segment = seg.from_file(io.BytesIO(clip), format="wav")
             combined += segment
 
+        self.clear()
+
         if len(combined) == 0:
             return None
 
@@ -85,20 +98,9 @@ class AudioManager:
         combined.export(buffer, format="wav")
         return buffer.getvalue()
     
-    def disk_wipwip(self, is_white, coords):
+    def disk_wipwip(self, is_white, coords, collect=True):
         """
         Generate disk placement sound with piece flip sounds.
-        
-        Combines:
-        - Disk placement sound
-        - Flips with pitch and pan based on board position
-        
-        Args:
-            is_white: Whether pieces are white (affects flip sound)
-            coords: List of (col, row) tuples for flipped pieces
-        
-        Returns:
-            Audio bytes
         """
         base_disk = self._load_sound("disk.wav")
         base_flip = self._load_sound("white.wav" if is_white else "black.wav")
@@ -115,18 +117,15 @@ class AudioManager:
             result += s
 
         result = self._prepend_silence(result)
-        return self._to_bytes(result)
+        bytes_data = self._to_bytes(result)
+
+        if collect:
+            self.add_clip(bytes_data)
+        return bytes_data
     
-    def error(self, x, y):
+    def error(self, x, y, collect=True):
         """
         Generate error sound with pitch/pan based on board position.
-        
-        Args:
-            x: Column (0-7)
-            y: Row (0-7)
-        
-        Returns:
-            Audio bytes
         """
         base = self._load_sound("error.wav")
 
@@ -134,23 +133,25 @@ class AudioManager:
         s = self._normalize(s, self.SPACE_DUR)
         s = self._prepend_silence(s)
 
-        return self._to_bytes(s)
+        bytes_data = self._to_bytes(s)
+        if collect:
+            self.add_clip(bytes_data)
+        return bytes_data
     
-    def pass_sound(self):
+    def pass_sound(self, collect=True):
         """
         Generate 'pass' sound when a player passes.
-        
-        Returns:
-            Audio bytes
         """
         base = self._load_sound("pass.wav")
         base = self._prepend_silence(base)
-        return self._to_bytes(base)
+        bytes_data = self._to_bytes(base)
+        if collect:
+            self.add_clip(bytes_data)
+        return bytes_data
 
 
 # ==================
 # MODULE INSTANCE
 # ==================
 
-# Create singleton instance for module-level convenience
 audio = AudioManager()
