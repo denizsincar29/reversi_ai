@@ -131,12 +131,24 @@
         },
 
         async play(soundName, r, c) {
+            console.log(`AudioEngine.play: ${soundName} at (${r}, ${c})`);
             try {
                 if (!this.ctx || this.ctx.state === 'closed') await this.init();
-                if (!this.ctx || !this.buffers[soundName]) return;
+                if (!this.ctx || !this.buffers[soundName]) {
+                    console.warn(`Sound ${soundName} not loaded or ctx missing.`);
+                    return;
+                }
 
                 if (this.ctx.state === 'suspended') {
-                    this.ctx.resume().catch(() => {});
+                    console.log("Context suspended, attempting resume...");
+                    await Promise.race([
+                        this.ctx.resume(),
+                        new Promise(resolve => setTimeout(resolve, 50))
+                    ]).catch(() => {});
+                }
+
+                if (this.ctx.state !== 'running') {
+                    console.warn(`Cannot play ${soundName}, context state: ${this.ctx.state}`);
                 }
 
                 const source = this.ctx.createBufferSource();
@@ -162,18 +174,15 @@
         },
 
         async playMoveSequence(player, r, c, flips) {
-            this.play('disk.wav', r, c);
+            await this.play('disk.wav', r, c);
             const sound = player === 'W' ? 'white.wav' : 'black.wav';
-            const totalWait = (flips.length + 1) * 120;
 
             for (let i = 0; i < flips.length; i++) {
                 const [fr, fc] = flips[i];
-                setTimeout(() => {
-                    this.play(sound, fr, fc);
-                }, (i + 1) * 120);
+                // Using a small delay between flips
+                await new Promise(resolve => setTimeout(resolve, 120));
+                await this.play(sound, fr, fc);
             }
-
-            return new Promise(resolve => setTimeout(resolve, totalWait + 100));
         }
     };
 
@@ -252,11 +261,15 @@
     }
 
     async function handleCellClick(btn, index) {
-        if (isProcessing) return;
+        if (isProcessing) {
+            console.log("Click ignored: isProcessing is true");
+            return;
+        }
 
+        console.log(`Cell clicked: index ${index}`);
         // Resume on every click to keep it alive
         if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
-            AudioEngine.ctx.resume().catch(console.warn);
+            AudioEngine.ctx.resume().catch(() => {});
         }
         await AudioEngine.init();
 
@@ -266,45 +279,60 @@
         // Block UI immediately to wait for Gradio sync
         isProcessing = true;
 
-        if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
-            localErrorPlayed = false;
-            const result = Reversi.applyMove(localGrid, humanColor, r, c);
-            localGrid = result.grid;
+        try {
+            if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
+                console.log("Move is valid locally, applying optimistic update.");
+                localErrorPlayed = false;
+                const result = Reversi.applyMove(localGrid, humanColor, r, c);
+                localGrid = result.grid;
 
-            // Play sound locally (optimistic)
-            await AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
+                // Play sound locally (optimistic)
+                await AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
 
-            const buttons = getBoardButtons();
-            buttons[index].setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
-            result.flips.forEach(([fr, fc]) => {
-                const flipBtn = buttons[fr * SIZE + fc];
-                flipBtn.classList.remove('flipping');
-                void flipBtn.offsetWidth;
-                flipBtn.classList.add('flipping');
-                flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
-            });
-        } else if (localGrid[r][c] === '.') {
-            // Set flag BEFORE playing to prevent race with incoming metadata
-            localErrorPlayed = true;
-            await AudioEngine.play('error.wav', r, c);
-        } else {
+                const buttons = getBoardButtons();
+                buttons[index].setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
+                result.flips.forEach(([fr, fc]) => {
+                    const flipBtn = buttons[fr * SIZE + fc];
+                    flipBtn.classList.remove('flipping');
+                    void flipBtn.offsetWidth;
+                    flipBtn.classList.add('flipping');
+                    flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
+                });
+            } else if (localGrid[r][c] === '.') {
+                console.log("Move is invalid locally, playing error sound.");
+                // Set flag BEFORE playing to prevent race with incoming metadata
+                localErrorPlayed = true;
+                await AudioEngine.play('error.wav', r, c);
+            } else {
+                isProcessing = false;
+            }
+        } catch (e) {
+            console.error("Error in handleCellClick", e);
             isProcessing = false;
         }
     }
 
     async function handleMetadataUpdate(metadataStr) {
         if (!metadataStr) return;
+        console.log("Metadata update received");
         let payload;
         try {
             payload = JSON.parse(metadataStr);
         } catch (e) {
+            console.error("Failed to parse metadata", e);
+            isProcessing = false;
             return;
         }
 
-        if (payload.ts && payload.ts <= lastProcessedTs) return;
+        if (payload.ts && payload.ts <= lastProcessedTs) {
+            console.log("Metadata is old, skipping.");
+            isProcessing = false;
+            return;
+        }
         lastProcessedTs = payload.ts || 0;
 
         const moves = payload.moves || [];
+        console.log(`Processing ${moves.length} moves from metadata`);
 
         try {
             // Replay moves sequentially
@@ -333,6 +361,7 @@
         } finally {
             isProcessing = false;
             localErrorPlayed = false;
+            console.log("Metadata processing complete, isProcessing reset.");
         }
     }
 
@@ -430,6 +459,7 @@
             let metadataChanged = false;
 
             for (const mutation of mutations) {
+                console.log(`Mutation observed: ${mutation.type}`, mutation.target);
                 let target = mutation.target;
                 if (mutation.type === 'characterData') {
                     target = target.parentElement;
@@ -478,7 +508,7 @@
                 console.warn("Safety reset: isProcessing was stuck.");
                 isProcessing = false;
             }
-        }, 20000);
+        }, 5000);
 
         // Resume audio context on visibility change (tab back)
         document.addEventListener('visibilitychange', () => {
