@@ -76,6 +76,34 @@ def handle_new_game(human_color, ai_type, ai_depth):
         return handle_turn(board, -1, -1, human_color, ai_type, ai_depth)
     return _build_ui_payload(board, "New game started. Black goes first.")
 
+def test_audio_ping_pong():
+    """Test endpoint: receives ping, sends back pong with metadata for audio test"""
+    import time
+    test_metadata = [
+        {"type": "move", "player": "W", "r": 3, "c": 4, "flips": [[3, 3]]},  # White sound
+    ]
+    final_status = "Audio test: Pong! White sound should have played."
+    
+    # Build minimal payload
+    payload = {
+        "moves": test_metadata,
+        "ts": time.time()
+    }
+    escaped_metadata = json.dumps(payload).replace("'", "&apos;")
+    metadata_html = f"<div id='move-metadata' data-payload='{escaped_metadata}'></div>"
+    
+    return [
+        Board(),                    # state
+        final_status,              # status
+        metadata_html,             # metadata
+        final_status,              # status text
+        "Ping received, pong sent with audio", # sr_text
+        gr.update(value=f'<div id="sr-announce" aria-live="polite" aria-atomic="true" style="position: absolute; left: -9999px;">Pong with audio test</div>'),
+        gr.update(value=""),       # advantage
+        gr.update(value=""),       # legal moves
+        *[gr.update(value=f"{Board.coord_label(r, c)} empty") for r in range(8) for c in range(8)],
+    ]
+
 # ====== UI ======
 
 with gr.Blocks() as demo:
@@ -134,6 +162,7 @@ with gr.Blocks() as demo:
             advantage_view = gr.HTML()
             legal_moves_view = gr.HTML()
             play_assist_btn = gr.Button("AI Assistant Move", variant="primary", elem_id="assist-btn")
+            test_audio_btn = gr.Button("🔊 Test Audio (Pong)", elem_id="test-audio-btn")
             new_btn = gr.Button("New Game", elem_id="new-game-btn")
             gr.Markdown("### Accessibility\nHotkeys: Alt+A announces advantage, Alt+L announces legal moves. Use arrow keys to navigate the board.")
 
@@ -164,6 +193,12 @@ with gr.Blocks() as demo:
     play_assist_btn.click(
         fn=handle_assist,
         inputs=[state, assist_type, assist_depth, ai_type, ai_depth, human_color],
+        outputs=event_outputs,
+    )
+
+    test_audio_btn.click(
+        fn=test_audio_ping_pong,
+        inputs=[],
         outputs=event_outputs,
     )
 

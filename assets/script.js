@@ -71,6 +71,8 @@
         STEP: 1000,
         DEFAULT_SAMPLE_RATE: 22050,
         initPromise: null,
+        silentLoopOscillator: null,
+        silentLoopGain: null,
 
         async init() {
             if (this.ctx && this.ctx.state === 'closed') {
@@ -185,6 +187,49 @@
                 await new Promise(resolve => setTimeout(resolve, 120));
                 await this.play(sound, fr, fc);
             }
+        },
+
+        startSilentLoop() {
+            // Start a continuous silent loop to prevent context suspension
+            if (this.silentLoopOscillator || !this.ctx || this.ctx.state !== 'running') {
+                console.log("Silent loop already running or context not ready");
+                return;
+            }
+            try {
+                // Create oscillator with extremely low frequency (inaudible)
+                this.silentLoopOscillator = this.ctx.createOscillator();
+                this.silentLoopGain = this.ctx.createGain();
+                
+                // Set frequency to sub-audible range (< 20 Hz)
+                this.silentLoopOscillator.frequency.value = 0.5;
+                
+                // Set gain to essentially silent (but not zero, to keep context active)
+                this.silentLoopGain.gain.value = 0.0001;
+                
+                // Connect but don't connect to destination to avoid any sound
+                // Instead, connect to a dummy gain that's disconnected
+                this.silentLoopOscillator.connect(this.silentLoopGain);
+                // Note: NOT connecting to destination keeps it truly silent
+                
+                this.silentLoopOscillator.start();
+                console.log("Silent loop started (0.5 Hz, gain 0.0001)");
+            } catch (e) {
+                console.warn("Failed to start silent loop:", e);
+            }
+        },
+
+        stopSilentLoop() {
+            // Stop the silent loop when game ends or user leaves
+            if (this.silentLoopOscillator) {
+                try {
+                    this.silentLoopOscillator.stop();
+                    this.silentLoopOscillator = null;
+                    this.silentLoopGain = null;
+                    console.log("Silent loop stopped");
+                } catch (e) {
+                    console.warn("Failed to stop silent loop:", e);
+                }
+            }
         }
     };
 
@@ -194,7 +239,7 @@
     let isProcessing = false;
     let localErrorPlayed = false;
     let lastProcessedTs = 0;
-    let humanMovePlayedOptimistically = false;
+    let optimisticHumanMove = null;
 
     function syncFromUI() {
         const buttons = getBoardButtons();
@@ -276,6 +321,8 @@
             AudioEngine.ctx.resume().catch(() => {});
         }
         await AudioEngine.init();
+        // Start silent loop to prevent context suspension during gameplay
+        AudioEngine.startSilentLoop();
 
         const r = Math.floor(index / SIZE);
         const c = index % SIZE;
@@ -284,7 +331,7 @@
             if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
                 // Block UI for valid moves until server syncs
                 isProcessing = true;
-                humanMovePlayedOptimistically = true;
+                optimisticHumanMove = { player: humanColor, r, c };
                 console.log("Move is valid locally, applying optimistic update.");
                 localErrorPlayed = false;
                 const result = Reversi.applyMove(localGrid, humanColor, r, c);
@@ -319,62 +366,78 @@
     }
 
     async function handleMetadataUpdate(metadataStr) {
-        if (!metadataStr) return;
-        console.log("Metadata update received");
+        if (!metadataStr) {
+            console.log("[META] No metadata string provided");
+            return;
+        }
+        console.log("[META] handleMetadataUpdate called with:", metadataStr.substring(0, 150));
         let payload;
         try {
             payload = JSON.parse(metadataStr);
+            console.log("[META] Parsed payload:", payload);
         } catch (e) {
-            console.error("Failed to parse metadata", e);
+            console.error("[META] Failed to parse metadata", e);
             isProcessing = false;
             return;
         }
 
         if (payload.ts && payload.ts <= lastProcessedTs) {
-            console.log("Metadata is old, skipping.");
+            console.log("[META] Metadata is old (ts:", payload.ts, "vs", lastProcessedTs, "), skipping.");
             isProcessing = false;
             return;
         }
         lastProcessedTs = payload.ts || 0;
 
+        // Ensure audio context is initialized (silent loop keeps it from suspending)
+        console.log("[META] Initializing audio engine...");
+        await AudioEngine.init();
+        console.log("[META] Audio context state:", AudioEngine.ctx ? AudioEngine.ctx.state : 'null');
+
         const moves = payload.moves || [];
-        console.log(`Processing ${moves.length} moves from metadata`);
+        console.log(`[META] Processing ${moves.length} moves from metadata`);
 
         try {
             // Replay moves sequentially
             for (const move of moves) {
-                console.log(`Replaying move: ${move.type} for ${move.player}`);
+                console.log(`[META] Replaying move: ${move.type} for ${move.player} at (${move.r}, ${move.c})`);
                 if (move.type === 'move') {
-                    // Only skip if it's the human's color AND we specifically flagged it as optimistically played.
-                    // This ensures AI Assistant moves (which are human color but not optimistic) always play.
-                    const isOptimisticHumanMove = (move.player === humanColor && humanMovePlayedOptimistically);
+                    // Only skip the exact move that was already sounded locally.
+                    const isOptimisticHumanMove = (
+                        optimisticHumanMove &&
+                        move.player === optimisticHumanMove.player &&
+                        move.r === optimisticHumanMove.r &&
+                        move.c === optimisticHumanMove.c
+                    );
+                    console.log(`[META] isOptimisticHumanMove: ${isOptimisticHumanMove}`);
 
                     if (!isOptimisticHumanMove) {
-                        console.log(`Playing move sound for ${move.player} at (${move.r}, ${move.c})`);
+                        console.log(`[META] Playing move sound for ${move.player} at (${move.r}, ${move.c})`);
                         await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
                         await new Promise(resolve => setTimeout(resolve, 300));
                     } else {
-                        console.log(`Skipping optimistic human move sound for ${move.player}`);
+                        console.log(`[META] Skipping optimistic human move sound for ${move.player}`);
                     }
                 } else if (move.type === 'pass') {
+                    console.log("[META] Playing pass sound");
                     await AudioEngine.play('pass.wav');
                     await new Promise(resolve => setTimeout(resolve, 600));
                 } else if (move.type === 'error' && move.player === humanColor) {
                     // Error sound is already handled optimistically in handleCellClick.
                     // We only play it here if we somehow didn't catch it locally.
                     if (!localErrorPlayed) {
+                        console.log("[META] Playing error sound");
                         await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
                     }
                     localErrorPlayed = false;
                 }
             }
         } catch (e) {
-            console.error("Error in metadata update", e);
+            console.error("[META] Error in metadata update", e);
         } finally {
+            console.log("[META] Metadata processing complete");
             isProcessing = false;
             localErrorPlayed = false;
-            humanMovePlayedOptimistically = false;
-            console.log("Metadata processing complete, flags reset.");
+            optimisticHumanMove = null;
         }
     }
 
@@ -455,8 +518,9 @@
             }
 
             const assistBtn = e.target.closest('#assist-btn');
+            const testAudioBtn = e.target.closest('#test-audio-btn');
             const newGameBtn = e.target.closest('#new-game-btn');
-            if (assistBtn || newGameBtn) {
+            if (assistBtn || testAudioBtn || newGameBtn) {
                 if (isProcessing) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -467,60 +531,59 @@
                     await AudioEngine.ctx.resume().catch(console.warn);
                 }
                 await AudioEngine.init();
+                AudioEngine.startSilentLoop();
+                // If test audio button, play black sound immediately
+                if (testAudioBtn) {
+                    console.log("Test audio button clicked - playing black sound");
+                    await AudioEngine.play('black.wav', 2, 2);
+                }
             }
         });
 
+        // Attach observer only to the two nodes we care about to avoid noisy mutations
         const observer = new MutationObserver((mutations) => {
             let boardChanged = false;
-            let metadataChanged = false;
+            let metadataAttrChanged = false;
 
             for (const mutation of mutations) {
-                console.log(`Mutation observed: ${mutation.type}`, mutation.target);
                 let target = mutation.target;
-                if (mutation.type === 'characterData') {
-                    target = target.parentElement;
-                }
-
+                if (mutation.type === 'characterData') target = target.parentElement;
                 if (!target) continue;
 
-                if (mutation.type === 'childList' || mutation.type === 'characterData') {
-                    // Check if mutation is within the board
-                    if (target.closest && target.closest('#board-container')) {
-                        boardChanged = true;
-                    }
-                    // Check if mutation is the metadata container
-                    if (target.id === 'move-metadata-container' ||
-                        (target.parentElement && target.parentElement.id === 'move-metadata-container')) {
-                        metadataChanged = true;
-                    }
+                // If mutation originates inside the board container -> refresh pieces
+                if ((mutation.type === 'childList' || mutation.type === 'characterData') && target.closest && target.closest('#board-container')) {
+                    boardChanged = true;
                 }
 
-                // Specifically watch data-payload attribute changes on move-metadata
+                // If the data-payload attribute on the move-metadata node changed -> process metadata
                 if (mutation.type === 'attributes' && target.id === 'move-metadata' && mutation.attributeName === 'data-payload') {
-                    metadataChanged = true;
+                    metadataAttrChanged = true;
                 }
             }
 
             if (boardChanged) updatePieceDataAttributes();
-            if (metadataChanged) {
+            if (metadataAttrChanged) {
                 const metaElem = document.getElementById('move-metadata');
                 if (metaElem) {
                     const currentMeta = metaElem.getAttribute('data-payload');
                     if (currentMeta && currentMeta !== window.__lastMeta) {
                         window.__lastMeta = currentMeta;
+                        console.log('[OBSERVER] move-metadata attribute changed, dispatching metadata');
                         handleMetadataUpdate(currentMeta);
                     }
                 }
             }
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            characterData: true,
-            attributes: true,
-            attributeFilter: ['data-payload']
-        });
+        // Observe only the metadata container and the board container (if present)
+        const metaContainer = document.getElementById('move-metadata') || document.getElementById('move-metadata-container');
+        if (metaContainer) {
+            observer.observe(metaContainer, { attributes: true, attributeFilter: ['data-payload'] });
+        }
+        const boardContainer = document.getElementById('board-container');
+        if (boardContainer) {
+            observer.observe(boardContainer, { childList: true, subtree: true, characterData: true });
+        }
 
         window.setTimeout(updatePieceDataAttributes, 500);
 

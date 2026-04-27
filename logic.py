@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 
 import gradio as gr
+import time
 from reversi import Board, AlphaBetaPlayer, MinimaxPlayer
+
+DEBUG = True  # Set to False after testing AI audio delay
 
 def get_player_instance(player_type, depth):
     if player_type == "AlphaBeta":
@@ -125,6 +128,10 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
 
             status_parts.append(ai_status)
             board = new_board
+            
+            # Debug: add delay to let browser play AI sound before next update
+            if DEBUG:
+                time.sleep(0.8)
 
             # If human has no moves, pass back to AI to continue the loop
             if not board.legal_moves(human_color) and not board.is_terminal():
