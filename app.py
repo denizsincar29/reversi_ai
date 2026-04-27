@@ -30,8 +30,7 @@ def _build_ui_payload(board: Board, status_text: str):
         board,
         final_status,
         audio_manager.get_audio_bytes(),
-        board.render_html(),
-        gr.update(value=final_status),
+        final_status,
         board.get_screenreader_text(final_status),
         logic.announce_to_screenreader(final_status),
         gr.update(value=adv_html),
@@ -73,7 +72,7 @@ with gr.Blocks() as demo:
 
     gr.Markdown(GR_MARKDOWN)
 
-    with gr.Accordion("Settings", open=True):
+    with gr.Accordion("Settings", open=False):
         with gr.Row():
             human_color = gr.Radio(choices=[("Black", "B"), ("White", "W")], value="B", label="Your Color")
             ai_type = gr.Radio(choices=["AlphaBeta", "Minimax"], value="AlphaBeta", label="Opponent AI Type")
@@ -83,44 +82,60 @@ with gr.Blocks() as demo:
             assist_type = gr.Radio(choices=["AlphaBeta", "Minimax"], value="Minimax", label="Assistant AI Type")
             assist_depth = gr.Slider(minimum=1, maximum=6, step=1, value=3, label="Assistant AI Depth")
 
-    gr.Markdown("Hotkeys: Alt+A announces advantage, Alt+L announces legal moves.")
-
     sr_announcement = gr.HTML(value='<div id="sr-announce" aria-live="polite" aria-atomic="true" style="position: absolute; left: -9999px;"></div>')
 
-    advantage_view = gr.HTML()
-    legal_moves_view = gr.HTML()
-
     with gr.Row():
-        board_view = gr.HTML()
+        # Board Column
+        with gr.Column(scale=2, elem_id="board-container"):
+            # Chess-style labels A-H top
+            with gr.Row(elem_id="col-labels-top"):
+                gr.HTML("<div class='edge-label corner'></div>")
+                for c in range(8):
+                    gr.HTML(f"<div class='edge-label col-label'>{chr(ord('A') + c)}</div>")
+                gr.HTML("<div class='edge-label corner'></div>")
+
+            buttons = []
+            for r in range(8):
+                with gr.Row(elem_id=f"row-{r+1}"):
+                    # Row label left
+                    gr.HTML(f"<div class='edge-label row-label'>{r+1}</div>")
+                    row_btns = []
+                    for c in range(8):
+                        btn = gr.Button("empty", elem_classes=["board-cell"], min_width=50)
+                        row_btns.append(btn)
+                    buttons.append(row_btns)
+                    # Row label right
+                    gr.HTML(f"<div class='edge-label row-label'>{r+1}</div>")
+
+            # Chess-style labels A-H bottom
+            with gr.Row(elem_id="col-labels-bottom"):
+                gr.HTML("<div class='edge-label corner'></div>")
+                for c in range(8):
+                    gr.HTML(f"<div class='edge-label col-label'>{chr(ord('A') + c)}</div>")
+                gr.HTML("<div class='edge-label corner'></div>")
+
+        # Info Column
         with gr.Column(scale=1):
-            play_assist_btn = gr.Button("AI Assistant Move")
+            status = gr.Textbox(label="Status", value="", interactive=False)
+            advantage_view = gr.HTML()
+            legal_moves_view = gr.HTML()
+            play_assist_btn = gr.Button("AI Assistant Move", variant="primary")
             new_btn = gr.Button("New Game")
+            gr.Markdown("### Accessibility\nHotkeys: Alt+A announces advantage, Alt+L announces legal moves. Use arrow keys to navigate the board.")
 
-    status = gr.Textbox(label="Status", value="")
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)
-
-    audio_output = gr.Audio(autoplay=True, interactive=False, label="")
-
-    buttons = []
-    for r in range(8):
-        with gr.Row():
-            row_btns = []
-            for c in range(8):
-                btn = gr.Button("empty", scale=1)
-                row_btns.append(btn)
-            buttons.append(row_btns)
+    audio_output = gr.Audio(autoplay=True, interactive=False, label="", visible=False)
 
     flat_buttons = [btn for row in buttons for btn in row]
     event_outputs = [
         state,              # 0
         status_state,       # 1
         audio_output,       # 2
-        board_view,         # 3
-        status,             # 4
-        sr_text,            # 5
-        sr_announcement,    # 6
-        advantage_view,     # 7
-        legal_moves_view,    # 8
+        status,             # 3
+        sr_text,            # 4
+        sr_announcement,    # 5
+        advantage_view,     # 6
+        legal_moves_view,    # 7
         *flat_buttons,
     ]
 
@@ -151,4 +166,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(js=APP_JS, css=APP_CSS)
+    demo.launch(css=APP_CSS, js=APP_JS)
