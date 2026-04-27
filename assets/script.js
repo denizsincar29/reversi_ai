@@ -72,13 +72,35 @@
         DEFAULT_SAMPLE_RATE: 22050,
 
         async init() {
-            if (this.ctx) return;
+            if (this.ctx) {
+                if (this.ctx.state === 'suspended') {
+                    await this.ctx.resume();
+                }
+                return;
+            }
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+            // Try to resume immediately
+            if (this.ctx.state === 'suspended') {
+                await this.ctx.resume().catch(console.warn);
+            }
+
             const loadPromises = this.sounds.map(async (sound) => {
                 try {
-                    const response = await fetch(`/file=sounds/${sound}`);
+                    // Use a more robust path
+                    const url = window.location.origin + window.location.pathname + `file=sounds/${sound}`;
+                    const response = await fetch(url);
                     if (!response.ok) throw new Error(`Status ${response.status}`);
+
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.includes("text/html")) {
+                        throw new Error("Received HTML instead of audio. Check if path is correct.");
+                    }
+
                     const arrayBuffer = await response.arrayBuffer();
+                    if (arrayBuffer.byteLength < 100) {
+                        throw new Error("Received too small buffer, likely not a valid audio file.");
+                    }
                     this.buffers[sound] = await this.ctx.decodeAudioData(arrayBuffer);
                 } catch (e) {
                     console.error(`Failed to load sound: ${sound}`, e);
@@ -87,8 +109,13 @@
             await Promise.all(loadPromises);
         },
 
-        play(soundName, r, c) {
+        async play(soundName, r, c) {
+            if (!this.ctx) await this.init();
             if (!this.ctx || !this.buffers[soundName]) return;
+
+            if (this.ctx.state === 'suspended') {
+                await this.ctx.resume();
+            }
 
             const source = this.ctx.createBufferSource();
             source.buffer = this.buffers[soundName];
@@ -153,15 +180,14 @@
 
     function updatePieceDataAttributes() {
         const buttons = getBoardButtons();
-        buttons.forEach(btn => {
-            const text = (btn.textContent || '').trim().toLowerCase();
-            let newPiece = '';
-            if (text.includes('black')) {
+        buttons.forEach((btn, idx) => {
+            const text = (btn.textContent || '').trim();
+            const lowerText = text.toLowerCase();
+            let newPiece = 'empty';
+            if (lowerText.includes('black')) {
                 newPiece = 'black';
-            } else if (text.includes('white')) {
+            } else if (lowerText.includes('white')) {
                 newPiece = 'white';
-            } else {
-                newPiece = 'empty';
             }
 
             const oldPiece = btn.getAttribute('data-piece');
@@ -174,19 +200,22 @@
                 }
                 btn.setAttribute('data-piece', newPiece);
             }
-            // Avoid setting aria-label if not changed to prevent observer cycles
-            const newAria = text;
-            if (btn.getAttribute('aria-label') !== newAria) {
-                btn.setAttribute('aria-label', newAria);
+
+            // Construct aria-label if it doesn't match the standard format or text is truncated
+            const r = Math.floor(idx / SIZE);
+            const c = idx % SIZE;
+            const coord = String.fromCharCode(65 + c) + (r + 1);
+            const expectedAria = `${coord} ${newPiece}`;
+
+            if (btn.getAttribute('aria-label') !== expectedAria) {
+                btn.setAttribute('aria-label', expectedAria);
             }
         });
         syncFromUI();
     }
 
     function getBoardButtons() {
-        return Array.from(document.querySelectorAll('button')).filter((b) =>
-            b.classList.contains('board-cell') || /^[A-H][1-8] (black|white|empty)$/i.test((b.textContent || '').trim())
-        );
+        return Array.from(document.querySelectorAll('button.board-cell'));
     }
 
     function focusCell(index) {
@@ -198,6 +227,9 @@
 
     async function handleCellClick(btn, index) {
         if (isProcessing) return;
+        if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+            await AudioEngine.ctx.resume();
+        }
         await AudioEngine.init();
 
         const r = Math.floor(index / SIZE);
@@ -222,7 +254,7 @@
                 flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
             });
         } else if (localGrid[r][c] === '.') {
-            AudioEngine.play('error.wav', r, c);
+            await AudioEngine.play('error.wav', r, c);
             localErrorPlayed = true;
         }
     }
@@ -246,11 +278,11 @@
                 await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
                 await new Promise(resolve => setTimeout(resolve, 300)); // Gap between moves
             } else if (move.type === 'pass') {
-                AudioEngine.play('pass.wav');
+                await AudioEngine.play('pass.wav');
                 await new Promise(resolve => setTimeout(resolve, 600));
             } else if (move.type === 'error' && move.player === humanColor) {
                 if (!localErrorPlayed) {
-                    AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
+                    await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
                 }
                 localErrorPlayed = false;
             }
@@ -326,14 +358,21 @@
             let metadataChanged = false;
 
             for (const mutation of mutations) {
+                let target = mutation.target;
+                if (mutation.type === 'characterData') {
+                    target = target.parentElement;
+                }
+
+                if (!target) continue;
+
                 if (mutation.type === 'childList' || mutation.type === 'characterData') {
                     // Check if mutation is within the board
-                    if (mutation.target.closest && mutation.target.closest('#board-container')) {
+                    if (target.closest && target.closest('#board-container')) {
                         boardChanged = true;
                     }
                     // Check if mutation is the metadata container
-                    if (mutation.target.id === 'move-metadata-container' ||
-                        (mutation.target.parentElement && mutation.target.parentElement.id === 'move-metadata-container')) {
+                    if (target.id === 'move-metadata-container' ||
+                        (target.parentElement && target.parentElement.id === 'move-metadata-container')) {
                         metadataChanged = true;
                     }
                 }

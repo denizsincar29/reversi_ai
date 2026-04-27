@@ -107,7 +107,9 @@ with gr.Blocks() as demo:
                     gr.HTML(f"<div class='edge-label row-label'>{r+1}</div>")
                     row_btns = []
                     for c in range(8):
-                        btn = gr.Button("empty", elem_classes=["board-cell"], min_width=50)
+                        # Initialize with coordinate for better SR support even before first update
+                        initial_label = f"{Board.coord_label(r, c)} empty"
+                        btn = gr.Button(initial_label, elem_classes=["board-cell"], min_width=50)
                         row_btns.append(btn)
                     buttons.append(row_btns)
                     # Row label right
@@ -172,4 +174,6 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=["sounds"])
+    # Use absolute path for allowed_paths to be safer
+    sounds_path = os.path.abspath("sounds")
+    demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=[sounds_path])
