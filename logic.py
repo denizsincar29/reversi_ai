@@ -68,7 +68,7 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
         else:
             if r == -1 or c == -1:
                 # This happens during handle_new_game or similar calls
-                return board, "Your turn. " + status_text if status_text else "Your turn."
+                return board, "Your turn."
 
             if (r, c) not in legal_moves:
                 audio_manager.error(c, r)

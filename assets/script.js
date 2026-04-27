@@ -82,7 +82,7 @@
             if (e.key === 'ArrowUp' && focusedIdx >= cols) nextIdx = focusedIdx - cols;
             else if (e.key === 'ArrowDown' && focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
             else if (e.key === 'ArrowLeft' && focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
-            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + cols === buttons.length ? focusedIdx : focusedIdx + 1;
+            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
             else return;
 
             e.preventDefault();
