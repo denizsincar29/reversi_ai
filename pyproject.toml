@@ -7,4 +7,9 @@ requires-python = ">=3.10"
 dependencies = [
     "gradio>=6.13.0",
     "pydub>=0.25.1",
+    "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

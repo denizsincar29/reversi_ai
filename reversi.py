@@ -281,6 +281,58 @@ class AlphaBetaPlayer(Player):
         return divmod(move, SIZE)
 
 
+class MinimaxPlayer(Player):
+    def __init__(self, depth=3):
+        self.depth = depth
+
+    def choose_move(self, board, player):
+        state = board.to_1d()
+
+        def maxv(s, d):
+            if d == 0:
+                return AIUtils.heuristic(s, player), None
+
+            moves = AIUtils.actions(s, player)
+            if not moves:
+                return minv(s, d - 1)
+
+            best_val = -math.inf
+            best_move = None
+            for m in moves:
+                val, _ = minv(AIUtils.result(s, player, m), d - 1)
+                if val > best_val:
+                    best_val = val
+                    best_move = m
+
+            return best_val, best_move
+
+        def minv(s, d):
+            op = AIUtils.other(player)
+
+            if d == 0:
+                return AIUtils.heuristic(s, player), None
+
+            moves = AIUtils.actions(s, op)
+            if not moves:
+                return maxv(s, d - 1)
+
+            best_val = math.inf
+            best_move = None
+            for m in moves:
+                val, _ = maxv(AIUtils.result(s, op, m), d - 1)
+                if val < best_val:
+                    best_val = val
+                    best_move = m
+
+            return best_val, best_move
+
+        _, move = maxv(state, self.depth)
+        if move is None:
+            return None
+
+        return divmod(move, SIZE)
+
+
 # =========================
 # Game
 # =========================
