@@ -260,6 +260,7 @@
         }
     }
 
+    let lastErrorTime = 0;
     async function handleCellClick(btn, index) {
         if (isProcessing) {
             console.log("Click ignored: isProcessing is true");
@@ -276,11 +277,10 @@
         const r = Math.floor(index / SIZE);
         const c = index % SIZE;
 
-        // Block UI immediately to wait for Gradio sync
-        isProcessing = true;
-
         try {
             if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
+                // Block UI for valid moves until server syncs
+                isProcessing = true;
                 console.log("Move is valid locally, applying optimistic update.");
                 localErrorPlayed = false;
                 const result = Reversi.applyMove(localGrid, humanColor, r, c);
@@ -299,12 +299,13 @@
                     flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
                 });
             } else if (localGrid[r][c] === '.') {
-                console.log("Move is invalid locally, playing error sound.");
-                // Set flag BEFORE playing to prevent race with incoming metadata
-                localErrorPlayed = true;
-                await AudioEngine.play('error.wav', r, c);
-            } else {
-                isProcessing = false;
+                const now = Date.now();
+                if (now - lastErrorTime > 200) {
+                    console.log("Move is invalid locally, playing error sound.");
+                    localErrorPlayed = true;
+                    await AudioEngine.play('error.wav', r, c);
+                    lastErrorTime = now;
+                }
             }
         } catch (e) {
             console.error("Error in handleCellClick", e);
@@ -478,6 +479,11 @@
                         metadataChanged = true;
                     }
                 }
+
+                // Specifically watch data-payload attribute changes on move-metadata
+                if (mutation.type === 'attributes' && target.id === 'move-metadata' && mutation.attributeName === 'data-payload') {
+                    metadataChanged = true;
+                }
             }
 
             if (boardChanged) updatePieceDataAttributes();
@@ -496,8 +502,9 @@
         observer.observe(document.body, {
             childList: true,
             subtree: true,
-            characterData: true
-            // attributes: false to avoid loops
+            characterData: true,
+            attributes: true,
+            attributeFilter: ['data-payload']
         });
 
         window.setTimeout(updatePieceDataAttributes, 500);
