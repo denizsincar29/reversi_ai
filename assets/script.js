@@ -66,7 +66,7 @@
     const AudioEngine = {
         ctx: null,
         buffers: {},
-        sounds: ['disk.wav', 'white.wav', 'black.wav', 'error.wav', 'pass.wav'],
+        sounds: ['disk.wav', 'white.wav', 'black.wav', 'error.wav', 'pass.wav', 'border.wav'],
         BASE_FREQ: 16000,
         STEP: 1000,
         DEFAULT_SAMPLE_RATE: 22050,
@@ -355,10 +355,22 @@
             const cols = 8;
             let nextIdx = focusedIdx;
 
-            if (e.key === 'ArrowUp' && focusedIdx >= cols) nextIdx = focusedIdx - cols;
-            else if (e.key === 'ArrowDown' && focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
-            else if (e.key === 'ArrowLeft' && focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
-            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
+            if (e.key === 'ArrowUp') {
+                if (focusedIdx >= cols) nextIdx = focusedIdx - cols;
+                else AudioEngine.play('border.wav');
+            }
+            else if (e.key === 'ArrowDown') {
+                if (focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
+                else AudioEngine.play('border.wav');
+            }
+            else if (e.key === 'ArrowLeft') {
+                if (focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
+                else AudioEngine.play('border.wav');
+            }
+            else if (e.key === 'ArrowRight') {
+                if (focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
+                else AudioEngine.play('border.wav');
+            }
             else if (e.key === 'Enter' || e.key === ' ') {
                 handleCellClick(focused, focusedIdx);
                 return;
