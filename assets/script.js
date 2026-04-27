@@ -151,6 +151,8 @@
                     console.warn(`Cannot play ${soundName}, context state: ${this.ctx.state}`);
                 }
 
+                if (this.ctx.state === 'closed') return;
+
                 const source = this.ctx.createBufferSource();
                 source.buffer = this.buffers[soundName];
 
@@ -298,7 +300,8 @@
                     flipBtn.classList.add('flipping');
                     flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
                 });
-            } else if (localGrid[r][c] === '.') {
+            } else {
+                // Any click that isn't a valid move plays the error sound
                 const now = Date.now();
                 if (now - lastErrorTime > 200) {
                     console.log("Move is invalid locally, playing error sound.");
@@ -338,12 +341,16 @@
         try {
             // Replay moves sequentially
             for (const move of moves) {
+                console.log(`Replaying move: ${move.type} for ${move.player}`);
                 if (move.type === 'move') {
                     // Skip if it's our move and we already played it optimistically
                     // But if it's AI or assistant move, we play it.
                     if (move.player !== humanColor || !isProcessing) {
+                        console.log(`Playing move sound for ${move.player} at (${move.r}, ${move.c})`);
                         await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
                         await new Promise(resolve => setTimeout(resolve, 300));
+                    } else {
+                        console.log(`Skipping optimistic human move sound for ${move.player}`);
                     }
                 } else if (move.type === 'pass') {
                     await AudioEngine.play('pass.wav');
@@ -403,21 +410,24 @@
             const cols = 8;
             let nextIdx = focusedIdx;
 
+            const focused_r = Math.floor(focusedIdx / SIZE);
+            const focused_c = focusedIdx % SIZE;
+
             if (e.key === 'ArrowUp') {
                 if (focusedIdx >= cols) nextIdx = focusedIdx - cols;
-                else AudioEngine.play('border.wav');
+                else AudioEngine.play('border.wav', focused_r, focused_c);
             }
             else if (e.key === 'ArrowDown') {
                 if (focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
-                else AudioEngine.play('border.wav');
+                else AudioEngine.play('border.wav', focused_r, focused_c);
             }
             else if (e.key === 'ArrowLeft') {
                 if (focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
-                else AudioEngine.play('border.wav');
+                else AudioEngine.play('border.wav', focused_r, focused_c);
             }
             else if (e.key === 'ArrowRight') {
                 if (focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
-                else AudioEngine.play('border.wav');
+                else AudioEngine.play('border.wav', focused_r, focused_c);
             }
             else if (e.key === 'Enter' || e.key === ' ') {
                 handleCellClick(focused, focusedIdx);
