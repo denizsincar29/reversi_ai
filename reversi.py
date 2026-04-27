@@ -20,15 +20,16 @@ CORNERS = [0, 7, 56, 63]
 class Board:
     def __init__(self):
         self.grid = [['.' for _ in range(SIZE)] for _ in range(SIZE)]
-
         self.grid[3][3] = 'W'
         self.grid[4][4] = 'W'
         self.grid[3][4] = 'B'
         self.grid[4][3] = 'B'
+        self.turn = 'B'
 
     def clone(self):
         b = Board()
         b.grid = [row.copy() for row in self.grid]
+        b.turn = self.turn
         return b
 
     # ---- Conversion ----
@@ -37,11 +38,12 @@ class Board:
         return [self.grid[r][c] for r in range(SIZE) for c in range(SIZE)]
 
     @staticmethod
-    def from_1d(arr):
+    def from_1d(arr, turn='B'):
         b = Board()
         for i in range(64):
             r, c = divmod(i, SIZE)
             b.grid[r][c] = arr[i]
+        b.turn = turn
         return b
 
     # ---- Logic ----
@@ -91,46 +93,97 @@ class Board:
             raise ValueError(f"Invalid move {move} for player {player}")
 
         new = self.clone()
-
         new.grid[r][c] = player
-
         for fx, fy in self.get_flips(player, c, r):
             new.grid[fy][fx] = player
 
+        new.turn = self.other(player)
         return new
 
     def count(self, player):
         return sum(row.count(player) for row in self.grid)
 
     def is_terminal(self):
-        if self.get_winner() != 'N':
-            return True
         return not self.legal_moves('B') and not self.legal_moves('W')
 
     def get_winner(self):
-        flat = self.to_1d()
-
-        if '.' not in flat:
-            b, w = flat.count('B'), flat.count('W')
+        b, w = self.count('B'), self.count('W')
+        if not self.legal_moves('B') and not self.legal_moves('W'):
             return 'B' if b > w else 'W' if w > b else 'D'
-
-        if flat.count('B') == 0:
-            return 'W'
-        if flat.count('W') == 0:
-            return 'B'
-
+        if b == 0: return 'W'
+        if w == 0: return 'B'
         return 'N'
 
-    def print(self):
-        print("\n   A B C D E F G H")
-        for r in range(SIZE):
-            row = f"{r+1}| "
-            for c in range(SIZE):
-                row += self.grid[r][c] + " "
-            print(row)
+    # ---- Rendering Helpers ----
 
-        print(f"B: {self.count('B')} | W: {self.count('W')}")
-        print("-" * 30)
+    @staticmethod
+    def coord_label(row, col):
+        return f"{chr(ord('A') + col)}{row + 1}"
+
+    @staticmethod
+    def piece_name(piece):
+        if piece == 'B': return "black"
+        if piece == 'W': return "white"
+        return "empty"
+
+    def get_button_labels(self):
+        labels = []
+        for r in range(SIZE):
+            for c in range(SIZE):
+                coord = self.coord_label(r, c)
+                piece = self.piece_name(self.grid[r][c])
+                labels.append(f"{coord} {piece}")
+        return labels
+
+    def render_html(self):
+        rows = []
+        for r in range(SIZE):
+            cells = []
+            for c in range(SIZE):
+                piece_char = self.grid[r][c]
+                piece_name = self.piece_name(piece_char)
+                if piece_char != ".":
+                    content = f'<div class="disk disk-{piece_name}"></div>'
+                else:
+                    content = ""
+                cells.append(f'<td class="cell">{content}</td>')
+            rows.append(f"<tr>{''.join(cells)}</tr>")
+        return "<table class='board-grid' aria-label='Reversi board'>" + "".join(rows) + "</table>"
+
+    def get_advantage_info(self):
+        b_count = self.count('B')
+        w_count = self.count('W')
+        diff = abs(b_count - w_count)
+
+        if b_count > w_count:
+            summary = f"Black advantage: +{diff} ({b_count} to {w_count})"
+            css_class = "leader-black"
+        elif w_count > b_count:
+            summary = f"White advantage: +{diff} ({w_count} to {b_count})"
+            css_class = "leader-white"
+        else:
+            summary = f"No advantage: tied at {b_count} each"
+            css_class = "leader-tie"
+
+        html = f"<div id='advantage-panel' class='info-card {css_class}' data-announce='{summary}'><strong>Advantage</strong><br>{summary}</div>"
+        return html, summary
+
+    def get_legal_moves_info(self, player):
+        moves = self.legal_moves(player)
+        moves_text = ", ".join(self.coord_label(r, c) for r, c in moves) if moves else "none"
+        p_name = "Black" if player == 'B' else "White"
+        summary = f"{p_name} legal moves: {moves_text}"
+        html = f"<div id='legal-panel' class='info-card legal-card' data-announce='{summary}'><strong>Legal Moves ({p_name})</strong><br>{moves_text}</div>"
+        return html, summary
+
+    def get_screenreader_text(self, status_text):
+        lines = [f"Announcement: {status_text}", "Board state:"]
+        for r in range(SIZE):
+            row_cells = []
+            for c in range(SIZE):
+                row_cells.append(f"{self.coord_label(r, c)} {self.piece_name(self.grid[r][c])}")
+            lines.append(", ".join(row_cells))
+        return "\n".join(lines)
 
 
 # =========================
@@ -235,7 +288,11 @@ class AlphaBetaPlayer(Player):
 
             moves = AIUtils.actions(s, player)
             if not moves:
-                return minv(s, alpha, beta, d-1)
+                # Check if other player has moves
+                if not AIUtils.actions(s, AIUtils.other(player)):
+                    return AIUtils.heuristic(s, player), None
+                val, _ = minv(s, alpha, beta, d-1)
+                return val, None
 
             v = -math.inf
             best = None
@@ -258,7 +315,10 @@ class AlphaBetaPlayer(Player):
 
             moves = AIUtils.actions(s, op)
             if not moves:
-                return maxv(s, alpha, beta, d-1)
+                if not AIUtils.actions(s, player):
+                    return AIUtils.heuristic(s, player), None
+                val, _ = maxv(s, alpha, beta, d-1)
+                return val, None
 
             v = math.inf
             best = None
@@ -274,10 +334,8 @@ class AlphaBetaPlayer(Player):
             return v, best
 
         _, move = maxv(state, -math.inf, math.inf, self.depth)
-
         if move is None:
             return None
-
         return divmod(move, SIZE)
 
 
@@ -294,7 +352,10 @@ class MinimaxPlayer(Player):
 
             moves = AIUtils.actions(s, player)
             if not moves:
-                return minv(s, d - 1)
+                if not AIUtils.actions(s, AIUtils.other(player)):
+                    return AIUtils.heuristic(s, player), None
+                val, _ = minv(s, d - 1)
+                return val, None
 
             best_val = -math.inf
             best_move = None
@@ -303,18 +364,19 @@ class MinimaxPlayer(Player):
                 if val > best_val:
                     best_val = val
                     best_move = m
-
             return best_val, best_move
 
         def minv(s, d):
             op = AIUtils.other(player)
-
             if d == 0:
                 return AIUtils.heuristic(s, player), None
 
             moves = AIUtils.actions(s, op)
             if not moves:
-                return maxv(s, d - 1)
+                if not AIUtils.actions(s, player):
+                    return AIUtils.heuristic(s, player), None
+                val, _ = maxv(s, d - 1)
+                return val, None
 
             best_val = math.inf
             best_move = None
@@ -323,71 +385,9 @@ class MinimaxPlayer(Player):
                 if val < best_val:
                     best_val = val
                     best_move = m
-
             return best_val, best_move
 
         _, move = maxv(state, self.depth)
         if move is None:
             return None
-
         return divmod(move, SIZE)
-
-
-# =========================
-# Game
-# =========================
-
-class Game:
-    def __init__(self, black, white):
-        self.board = Board()
-        self.black = black
-        self.white = white
-
-    def play(self):
-        board = self.board
-        player = 'B'
-        passes = 0
-
-        board.print()
-
-        while True:
-            current = self.black if player == 'B' else self.white
-
-            moves = board.legal_moves(player)
-
-            if moves:
-                passes = 0
-                t0 = time.time()
-
-                move = current.choose_move(board, player)
-
-                dt = time.time() - t0
-
-                print(f"{player} -> {move} [{dt:.4f}s]")
-
-                board = board.apply_move(player, move)
-                board.print()
-            else:
-                print(f"{player} pass")
-                passes += 1
-                if passes >= 2:
-                    break
-
-            if board.is_terminal():
-                break
-
-            player = board.other(player)
-
-        print("Winner:", board.get_winner())
-
-
-# =========================
-# Run
-# =========================
-
-if __name__ == "__main__":
-    game = Game(
-        black=RandomPlayer(),
-        white=AlphaBetaPlayer(depth=3)
-    )
-    game.play()
