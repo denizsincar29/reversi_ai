@@ -163,6 +163,19 @@ def render_board(board: Board):
 def _announce_to_screenreader(status_text: str):
     return gr.update(value=f'<div id=\"sr-announce\" aria-live=\"polite\" aria-atomic=\"true\" style=\"position: absolute; left: -9999px;\">{status_text}</div>')
 
+def _check_game_end(board: Board):
+    """Return (is_game_over, announcement_text) tuple."""
+    if not board.is_terminal():
+        return False, ""
+    
+    winner = board.get_winner()
+    if winner == 'B':
+        return True, "Game Over! Black wins!"
+    elif winner == 'W':
+        return True, "Game Over! White (AI) wins!"
+    elif winner == 'D':
+        return True, "Game Over! Draw!"
+    return False, ""
 
 # ====== UI ======
 
@@ -247,7 +260,7 @@ with gr.Blocks(js=APP_JS) as demo:
     status = gr.Textbox(label="Status", value="")
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)
 
-    audio = gr.Audio(autoplay=True)
+    audio = gr.Audio(autoplay=True, interactive=False, show_download_button=False, label="")
 
     # координаты клика
     click_row = gr.Number(visible=False)
@@ -286,12 +299,12 @@ with gr.Blocks(js=APP_JS) as demo:
                 inputs=state,
                 outputs=board_view
             ).then(
-                fn=lambda st: gr.update(value=st),
-                inputs=status_state,
+                fn=lambda st, b: gr.update(value=f"{st} {_check_game_end(b)[1]}") if _check_game_end(b)[0] else gr.update(value=st),
+                inputs=[status_state, state],
                 outputs=status
             ).then(
-                fn=_announce_to_screenreader,
-                inputs=status_state,
+                fn=lambda st, b: _announce_to_screenreader(f"{st} {_check_game_end(b)[1]}") if _check_game_end(b)[0] else _announce_to_screenreader(st),
+                inputs=[status_state, state],
                 outputs=sr_announcement
             ).then(
                 fn=lambda b: [gr.update(value=lbl) for lbl in _button_labels(b)],
