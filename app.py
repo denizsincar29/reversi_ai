@@ -21,6 +21,8 @@ GR_MARKDOWN = load_asset("info.md")
 
 # ====== UI HELPERS ======
 
+import time
+
 def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
     if moves_metadata is None:
         moves_metadata = []
@@ -29,8 +31,12 @@ def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
     legal_html, _ = board.get_legal_moves_info(board.turn)
 
     # Use a div with data-attribute for more reliable JS access
-    # Use json.dumps twice to escape it properly for the HTML attribute
-    escaped_metadata = json.dumps(moves_metadata).replace("'", "&apos;")
+    # Include a timestamp to ensure the attribute always changes and triggers JS update
+    payload = {
+        "moves": moves_metadata,
+        "ts": time.time()
+    }
+    escaped_metadata = json.dumps(payload).replace("'", "&apos;")
     metadata_html = f"<div id='move-metadata' data-payload='{escaped_metadata}'></div>"
 
     return [
@@ -127,8 +133,8 @@ with gr.Blocks() as demo:
             status = gr.Textbox(label="Status", value="", interactive=False)
             advantage_view = gr.HTML()
             legal_moves_view = gr.HTML()
-            play_assist_btn = gr.Button("AI Assistant Move", variant="primary")
-            new_btn = gr.Button("New Game")
+            play_assist_btn = gr.Button("AI Assistant Move", variant="primary", elem_id="assist-btn")
+            new_btn = gr.Button("New Game", elem_id="new-game-btn")
             gr.Markdown("### Accessibility\nHotkeys: Alt+A announces advantage, Alt+L announces legal moves. Use arrow keys to navigate the board.")
 
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)

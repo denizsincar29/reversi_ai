@@ -70,22 +70,26 @@
         BASE_FREQ: 16000,
         STEP: 1000,
         DEFAULT_SAMPLE_RATE: 22050,
+        initPromise: null,
 
         async init() {
-            if (this.ctx) {
+            if (this.initPromise) return this.initPromise;
+
+            this.initPromise = (async () => {
+                if (this.ctx) {
+                    if (this.ctx.state === 'suspended') {
+                        await this.ctx.resume().catch(console.warn);
+                    }
+                    return;
+                }
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+                // Try to resume immediately
                 if (this.ctx.state === 'suspended') {
                     await this.ctx.resume().catch(console.warn);
                 }
-                return;
-            }
-            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Try to resume immediately
-            if (this.ctx.state === 'suspended') {
-                await this.ctx.resume().catch(console.warn);
-            }
-
-            const loadPromises = this.sounds.map(async (sound) => {
+                const loadPromises = this.sounds.map(async (sound) => {
                 try {
                     // Use a more robust path, ensuring correct slash separator
                     // In Gradio 6+, files are served under /gradio_api/file=... or /file=...
@@ -116,6 +120,11 @@
                 }
             });
             await Promise.all(loadPromises);
+            }).finally(() => {
+                // Keep the promise if it succeeded, or clear it if we want to retry.
+                // For now, let's just keep it to avoid multiple init cycles.
+            });
+            return this.initPromise;
         },
 
         async play(soundName, r, c) {
@@ -263,42 +272,50 @@
                 flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
             });
         } else if (localGrid[r][c] === '.') {
-            await AudioEngine.play('error.wav', r, c);
+            // Set flag BEFORE playing to prevent race with incoming metadata
             localErrorPlayed = true;
+            await AudioEngine.play('error.wav', r, c);
         }
     }
 
     async function handleMetadataUpdate(metadataStr) {
         if (!metadataStr) return;
-        let metadata;
+        let payload;
         try {
-            metadata = JSON.parse(metadataStr);
+            payload = JSON.parse(metadataStr);
         } catch (e) {
             return;
         }
 
-        // Replay AI moves sequentially
-        for (const move of metadata) {
-            if (move.player === humanColor && move.type === 'move') {
-                continue;
-            }
+        const moves = payload.moves || [];
 
-            if (move.type === 'move') {
-                await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
-                await new Promise(resolve => setTimeout(resolve, 300)); // Gap between moves
-            } else if (move.type === 'pass') {
-                await AudioEngine.play('pass.wav');
-                await new Promise(resolve => setTimeout(resolve, 600));
-            } else if (move.type === 'error' && move.player === humanColor) {
-                if (!localErrorPlayed) {
-                    await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
+        try {
+            // Replay moves sequentially
+            for (const move of moves) {
+                if (move.type === 'move') {
+                    // Only play AI moves or our move if we haven't played it optimistically
+                    // (Actually AI will always be different player, unless assistant)
+                    if (move.player !== humanColor || !isProcessing) {
+                        await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                    }
+                } else if (move.type === 'pass') {
+                    await AudioEngine.play('pass.wav');
+                    await new Promise(resolve => setTimeout(resolve, 600));
+                } else if (move.type === 'error' && move.player === humanColor) {
+                    if (!localErrorPlayed) {
+                        await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
+                    }
+                    // Reset error flag after checking
+                    localErrorPlayed = false;
                 }
-                localErrorPlayed = false;
             }
+        } catch (e) {
+            console.error("Error in metadata update", e);
+        } finally {
+            isProcessing = false;
+            localErrorPlayed = false;
         }
-
-        isProcessing = false;
-        localErrorPlayed = false;
     }
 
     function hookKeyboardNav() {
@@ -359,6 +376,22 @@
                 const idx = buttons.indexOf(btn);
                 await handleCellClick(btn, idx);
                 btn.focus();
+                return;
+            }
+
+            const assistBtn = e.target.closest('#assist-btn');
+            const newGameBtn = e.target.closest('#new-game-btn');
+            if (assistBtn || newGameBtn) {
+                if (isProcessing) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+                isProcessing = true;
+                if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                    await AudioEngine.ctx.resume().catch(console.warn);
+                }
+                await AudioEngine.init();
             }
         });
 
