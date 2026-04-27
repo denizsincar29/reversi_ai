@@ -2,7 +2,6 @@
 
 import gradio as gr
 from reversi import Board, AlphaBetaPlayer, MinimaxPlayer
-from audio import audio as audio_manager
 
 def get_player_instance(player_type, depth):
     if player_type == "AlphaBeta":
@@ -48,36 +47,41 @@ def announce_to_screenreader(status_text: str):
     )
 
 def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
-    audio_manager.clear()
     status_parts = []
+    moves_metadata = []
 
     # 1. Check if game is already over
     if board.is_terminal():
-        return board, "Game already finished"
+        return board, "Game already finished", moves_metadata
 
     # 2. Human turn
     if board.turn == human_color:
         legal_moves = board.legal_moves(human_color)
 
         if not legal_moves:
-            # This should ideally be handled by the loop if we want consistency,
-            # but we keep it here for the immediate response.
             status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed")
-            audio_manager.pass_sound()
+            moves_metadata.append({"type": "pass", "player": human_color})
             board.turn = board.other(human_color)
         else:
             if r == -1 or c == -1:
-                # This happens during handle_new_game or similar calls
-                return board, "Your turn."
+                return board, "Your turn.", moves_metadata
 
             if (r, c) not in legal_moves:
-                audio_manager.error(c, r)
-                return board, f"Invalid move at {Board.coord_label(r, c)}"
+                moves_metadata.append({"type": "error", "player": human_color, "coords": [r, c]})
+                return board, f"Invalid move at {Board.coord_label(r, c)}", moves_metadata
 
             # Apply human move
             new_board = board.apply_move(human_color, (r, c))
             changed = _changed_to_player(board, new_board, human_color)
-            audio_manager.disk_wipwip(is_white=(human_color == 'W'), coords=changed)
+
+            # Metadata for JS to play sound and animate
+            # flips should be [r, c] for consistency with JS engine
+            moves_metadata.append({
+                "type": "move",
+                "player": human_color,
+                "r": r, "c": c,
+                "flips": [[f[1], f[0]] for f in changed if f != (c, r)]
+            })
 
             flip_count = len(changed) - 1
             move_status = f"You played at {Board.coord_label(r, c)}"
@@ -93,20 +97,26 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
 
         if not ai_moves:
             status_parts.append(f"{ai_type} ({'Black' if ai_color == 'B' else 'White'}) passed")
-            audio_manager.pass_sound()
+            moves_metadata.append({"type": "pass", "player": ai_color})
             board.turn = board.other(ai_color)
         else:
             ai_player = get_player_instance(ai_type, ai_depth)
             move = ai_player.choose_move(board, ai_color)
             if move is None:
                 status_parts.append(f"{ai_type} ({'Black' if ai_color == 'B' else 'White'}) passed")
-                audio_manager.pass_sound()
+                moves_metadata.append({"type": "pass", "player": ai_color})
                 board.turn = board.other(ai_color)
                 continue
 
             new_board = board.apply_move(ai_color, move)
             changed = _changed_to_player(board, new_board, ai_color)
-            audio_manager.disk_wipwip(is_white=(ai_color == 'W'), coords=changed)
+
+            moves_metadata.append({
+                "type": "move",
+                "player": ai_color,
+                "r": move[0], "c": move[1],
+                "flips": [[f[1], f[0]] for f in changed if f != (move[1], move[0])]
+            })
 
             flip_count = len(changed) - 1
             ai_status = f"{ai_type} ({'Black' if ai_color == 'B' else 'White'}) played {Board.coord_label(move[0], move[1])}"
@@ -119,7 +129,7 @@ def process_turn(board: Board, r, c, human_color, ai_type, ai_depth):
             # If human has no moves, pass back to AI to continue the loop
             if not board.legal_moves(human_color) and not board.is_terminal():
                 status_parts.append(f"{'Black' if human_color == 'B' else 'White'} (You) passed (no legal moves)")
-                audio_manager.pass_sound()
+                moves_metadata.append({"type": "pass", "player": human_color})
                 board.turn = ai_color
 
-    return board, ". ".join(status_parts)
+    return board, ". ".join(status_parts), moves_metadata
