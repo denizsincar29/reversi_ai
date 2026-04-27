@@ -66,62 +66,125 @@
     const AudioEngine = {
         ctx: null,
         buffers: {},
-        sounds: ['disk.wav', 'white.wav', 'black.wav', 'error.wav', 'pass.wav'],
+        sounds: ['disk.wav', 'white.wav', 'black.wav', 'error.wav', 'pass.wav', 'border.wav'],
         BASE_FREQ: 16000,
         STEP: 1000,
         DEFAULT_SAMPLE_RATE: 22050,
+        initPromise: null,
 
         async init() {
-            if (this.ctx) return;
-            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const loadPromises = this.sounds.map(async (sound) => {
-                try {
-                    const response = await fetch(`/file=sounds/${sound}`);
-                    if (!response.ok) throw new Error(`Status ${response.status}`);
-                    const arrayBuffer = await response.arrayBuffer();
-                    this.buffers[sound] = await this.ctx.decodeAudioData(arrayBuffer);
-                } catch (e) {
-                    console.error(`Failed to load sound: ${sound}`, e);
+            if (this.ctx && this.ctx.state === 'closed') {
+                this.ctx = null;
+                this.initPromise = null;
+            }
+            if (this.initPromise) return this.initPromise;
+
+            const doInit = async () => {
+                if (this.ctx) {
+                    if (this.ctx.state === 'suspended') {
+                        await this.ctx.resume().catch(() => {});
+                    }
+                    return;
                 }
-            });
-            await Promise.all(loadPromises);
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume().catch(() => {});
+                }
+
+                const loadPromises = this.sounds.map(async (sound) => {
+                    try {
+                        // Use a more robust path, ensuring correct slash separator
+                        // In Gradio 6+, files are served under /gradio_api/file=... or /file=...
+                        const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
+
+                        let url = window.location.origin + base + `gradio_api/file=sounds/${sound}`;
+                        let response = await fetch(url);
+
+                        if (!response.ok) {
+                            // Fallback to /file=...
+                            url = window.location.origin + base + `file=sounds/${sound}`;
+                            response = await fetch(url);
+                        }
+                        if (!response.ok) throw new Error(`Status ${response.status}`);
+
+                        const contentType = response.headers.get("content-type");
+                        if (contentType && contentType.includes("text/html")) {
+                            throw new Error("Received HTML instead of audio. Check if path is correct.");
+                        }
+
+                        const arrayBuffer = await response.arrayBuffer();
+                        if (arrayBuffer.byteLength < 100) {
+                            throw new Error("Received too small buffer, likely not a valid audio file.");
+                        }
+                        this.buffers[sound] = await this.ctx.decodeAudioData(arrayBuffer);
+                    } catch (e) {
+                        console.error(`Failed to load sound: ${sound}`, e);
+                    }
+                });
+                await Promise.all(loadPromises);
+            };
+
+            this.initPromise = doInit();
+            this.initPromise.then(() => {}, () => {}); // Handle rejection to avoid unhandled promise rejections
+            return this.initPromise;
         },
 
-        play(soundName, r, c) {
-            if (!this.ctx || !this.buffers[soundName]) return;
+        async play(soundName, r, c) {
+            console.log(`AudioEngine.play: ${soundName} at (${r}, ${c})`);
+            try {
+                if (!this.ctx || this.ctx.state === 'closed') await this.init();
+                if (!this.ctx || !this.buffers[soundName]) {
+                    console.warn(`Sound ${soundName} not loaded or ctx missing.`);
+                    return;
+                }
 
-            const source = this.ctx.createBufferSource();
-            source.buffer = this.buffers[soundName];
+                if (this.ctx.state === 'suspended') {
+                    console.log("Context suspended, attempting resume...");
+                    await Promise.race([
+                        this.ctx.resume(),
+                        new Promise(resolve => setTimeout(resolve, 50))
+                    ]).catch(() => {});
+                }
 
-            if (r !== undefined) {
-                const targetFreq = this.BASE_FREQ + r * this.STEP;
-                source.playbackRate.value = targetFreq / this.DEFAULT_SAMPLE_RATE;
+                if (this.ctx.state !== 'running') {
+                    console.warn(`Cannot play ${soundName}, context state: ${this.ctx.state}`);
+                }
+
+                if (this.ctx.state === 'closed') return;
+
+                const source = this.ctx.createBufferSource();
+                source.buffer = this.buffers[soundName];
+
+                if (r !== undefined) {
+                    const targetFreq = this.BASE_FREQ + r * this.STEP;
+                    source.playbackRate.value = targetFreq / this.DEFAULT_SAMPLE_RATE;
+                }
+
+                const panner = this.ctx.createStereoPanner();
+                if (c !== undefined) {
+                    panner.pan.value = (2 * c / 7) - 1.0;
+                } else {
+                    panner.pan.value = 0;
+                }
+
+                source.connect(panner).connect(this.ctx.destination);
+                source.start();
+            } catch (e) {
+                console.error("Error playing sound", e);
             }
-
-            const panner = this.ctx.createStereoPanner();
-            if (c !== undefined) {
-                panner.pan.value = (2 * c / 7) - 1.0;
-            } else {
-                panner.pan.value = 0;
-            }
-
-            source.connect(panner).connect(this.ctx.destination);
-            source.start();
         },
 
         async playMoveSequence(player, r, c, flips) {
-            this.play('disk.wav', r, c);
+            await this.play('disk.wav', r, c);
             const sound = player === 'W' ? 'white.wav' : 'black.wav';
-            const totalWait = (flips.length + 1) * 120;
 
             for (let i = 0; i < flips.length; i++) {
                 const [fr, fc] = flips[i];
-                setTimeout(() => {
-                    this.play(sound, fr, fc);
-                }, (i + 1) * 120);
+                // Using a small delay between flips
+                await new Promise(resolve => setTimeout(resolve, 120));
+                await this.play(sound, fr, fc);
             }
-
-            return new Promise(resolve => setTimeout(resolve, totalWait + 100));
         }
     };
 
@@ -130,6 +193,8 @@
     let humanColor = 'B';
     let isProcessing = false;
     let localErrorPlayed = false;
+    let lastProcessedTs = 0;
+    let humanMovePlayedOptimistically = false;
 
     function syncFromUI() {
         const buttons = getBoardButtons();
@@ -153,15 +218,14 @@
 
     function updatePieceDataAttributes() {
         const buttons = getBoardButtons();
-        buttons.forEach(btn => {
-            const text = (btn.textContent || '').trim().toLowerCase();
-            let newPiece = '';
-            if (text.includes('black')) {
+        buttons.forEach((btn, idx) => {
+            const text = (btn.textContent || '').trim();
+            const lowerText = text.toLowerCase();
+            let newPiece = 'empty';
+            if (lowerText.includes('black')) {
                 newPiece = 'black';
-            } else if (text.includes('white')) {
+            } else if (lowerText.includes('white')) {
                 newPiece = 'white';
-            } else {
-                newPiece = 'empty';
             }
 
             const oldPiece = btn.getAttribute('data-piece');
@@ -174,19 +238,22 @@
                 }
                 btn.setAttribute('data-piece', newPiece);
             }
-            // Avoid setting aria-label if not changed to prevent observer cycles
-            const newAria = text;
-            if (btn.getAttribute('aria-label') !== newAria) {
-                btn.setAttribute('aria-label', newAria);
+
+            // Construct aria-label if it doesn't match the standard format or text is truncated
+            const r = Math.floor(idx / SIZE);
+            const c = idx % SIZE;
+            const coord = String.fromCharCode(65 + c) + (r + 1);
+            const expectedAria = `${coord} ${newPiece}`;
+
+            if (btn.getAttribute('aria-label') !== expectedAria) {
+                btn.setAttribute('aria-label', expectedAria);
             }
         });
         syncFromUI();
     }
 
     function getBoardButtons() {
-        return Array.from(document.querySelectorAll('button')).filter((b) =>
-            b.classList.contains('board-cell') || /^[A-H][1-8] (black|white|empty)$/i.test((b.textContent || '').trim())
-        );
+        return Array.from(document.querySelectorAll('button.board-cell'));
     }
 
     function focusCell(index) {
@@ -196,68 +263,119 @@
         }
     }
 
+    let lastErrorTime = 0;
     async function handleCellClick(btn, index) {
-        if (isProcessing) return;
+        if (isProcessing) {
+            console.log("Click ignored: isProcessing is true");
+            return;
+        }
+
+        console.log(`Cell clicked: index ${index}`);
+        // Resume on every click to keep it alive
+        if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+            AudioEngine.ctx.resume().catch(() => {});
+        }
         await AudioEngine.init();
 
         const r = Math.floor(index / SIZE);
         const c = index % SIZE;
 
-        if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
-            isProcessing = true;
-            localErrorPlayed = false;
-            const result = Reversi.applyMove(localGrid, humanColor, r, c);
-            localGrid = result.grid;
+        try {
+            if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
+                // Block UI for valid moves until server syncs
+                isProcessing = true;
+                humanMovePlayedOptimistically = true;
+                console.log("Move is valid locally, applying optimistic update.");
+                localErrorPlayed = false;
+                const result = Reversi.applyMove(localGrid, humanColor, r, c);
+                localGrid = result.grid;
 
-            // Play sound locally (optimistic)
-            await AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
+                // Play sound locally (optimistic)
+                await AudioEngine.playMoveSequence(humanColor, r, c, result.flips);
 
-            const buttons = getBoardButtons();
-            buttons[index].setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
-            result.flips.forEach(([fr, fc]) => {
-                const flipBtn = buttons[fr * SIZE + fc];
-                flipBtn.classList.remove('flipping');
-                void flipBtn.offsetWidth;
-                flipBtn.classList.add('flipping');
-                flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
-            });
-        } else if (localGrid[r][c] === '.') {
-            AudioEngine.play('error.wav', r, c);
-            localErrorPlayed = true;
+                const buttons = getBoardButtons();
+                buttons[index].setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
+                result.flips.forEach(([fr, fc]) => {
+                    const flipBtn = buttons[fr * SIZE + fc];
+                    flipBtn.classList.remove('flipping');
+                    void flipBtn.offsetWidth;
+                    flipBtn.classList.add('flipping');
+                    flipBtn.setAttribute('data-piece', humanColor === 'B' ? 'black' : 'white');
+                });
+            } else {
+                // Any click that isn't a valid move plays the error sound
+                const now = Date.now();
+                if (now - lastErrorTime > 200) {
+                    console.log("Move is invalid locally, playing error sound.");
+                    localErrorPlayed = true;
+                    await AudioEngine.play('error.wav', r, c);
+                    lastErrorTime = now;
+                }
+            }
+        } catch (e) {
+            console.error("Error in handleCellClick", e);
+            isProcessing = false;
         }
     }
 
     async function handleMetadataUpdate(metadataStr) {
         if (!metadataStr) return;
-        let metadata;
+        console.log("Metadata update received");
+        let payload;
         try {
-            metadata = JSON.parse(metadataStr);
+            payload = JSON.parse(metadataStr);
         } catch (e) {
+            console.error("Failed to parse metadata", e);
+            isProcessing = false;
             return;
         }
 
-        // Replay AI moves sequentially
-        for (const move of metadata) {
-            if (move.player === humanColor && move.type === 'move') {
-                continue;
-            }
-
-            if (move.type === 'move') {
-                await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
-                await new Promise(resolve => setTimeout(resolve, 300)); // Gap between moves
-            } else if (move.type === 'pass') {
-                AudioEngine.play('pass.wav');
-                await new Promise(resolve => setTimeout(resolve, 600));
-            } else if (move.type === 'error' && move.player === humanColor) {
-                if (!localErrorPlayed) {
-                    AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
-                }
-                localErrorPlayed = false;
-            }
+        if (payload.ts && payload.ts <= lastProcessedTs) {
+            console.log("Metadata is old, skipping.");
+            isProcessing = false;
+            return;
         }
+        lastProcessedTs = payload.ts || 0;
 
-        isProcessing = false;
-        localErrorPlayed = false;
+        const moves = payload.moves || [];
+        console.log(`Processing ${moves.length} moves from metadata`);
+
+        try {
+            // Replay moves sequentially
+            for (const move of moves) {
+                console.log(`Replaying move: ${move.type} for ${move.player}`);
+                if (move.type === 'move') {
+                    // Only skip if it's the human's color AND we specifically flagged it as optimistically played.
+                    // This ensures AI Assistant moves (which are human color but not optimistic) always play.
+                    const isOptimisticHumanMove = (move.player === humanColor && humanMovePlayedOptimistically);
+
+                    if (!isOptimisticHumanMove) {
+                        console.log(`Playing move sound for ${move.player} at (${move.r}, ${move.c})`);
+                        await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                    } else {
+                        console.log(`Skipping optimistic human move sound for ${move.player}`);
+                    }
+                } else if (move.type === 'pass') {
+                    await AudioEngine.play('pass.wav');
+                    await new Promise(resolve => setTimeout(resolve, 600));
+                } else if (move.type === 'error' && move.player === humanColor) {
+                    // Error sound is already handled optimistically in handleCellClick.
+                    // We only play it here if we somehow didn't catch it locally.
+                    if (!localErrorPlayed) {
+                        await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
+                    }
+                    localErrorPlayed = false;
+                }
+            }
+        } catch (e) {
+            console.error("Error in metadata update", e);
+        } finally {
+            isProcessing = false;
+            localErrorPlayed = false;
+            humanMovePlayedOptimistically = false;
+            console.log("Metadata processing complete, flags reset.");
+        }
     }
 
     function hookKeyboardNav() {
@@ -297,10 +415,25 @@
             const cols = 8;
             let nextIdx = focusedIdx;
 
-            if (e.key === 'ArrowUp' && focusedIdx >= cols) nextIdx = focusedIdx - cols;
-            else if (e.key === 'ArrowDown' && focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
-            else if (e.key === 'ArrowLeft' && focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
-            else if (e.key === 'ArrowRight' && focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
+            const focused_r = Math.floor(focusedIdx / SIZE);
+            const focused_c = focusedIdx % SIZE;
+
+            if (e.key === 'ArrowUp') {
+                if (focusedIdx >= cols) nextIdx = focusedIdx - cols;
+                else AudioEngine.play('border.wav', focused_r, focused_c);
+            }
+            else if (e.key === 'ArrowDown') {
+                if (focusedIdx < cols * (cols - 1)) nextIdx = focusedIdx + cols;
+                else AudioEngine.play('border.wav', focused_r, focused_c);
+            }
+            else if (e.key === 'ArrowLeft') {
+                if (focusedIdx % cols > 0) nextIdx = focusedIdx - 1;
+                else AudioEngine.play('border.wav', focused_r, focused_c);
+            }
+            else if (e.key === 'ArrowRight') {
+                if (focusedIdx % cols < cols - 1) nextIdx = focusedIdx + 1;
+                else AudioEngine.play('border.wav', focused_r, focused_c);
+            }
             else if (e.key === 'Enter' || e.key === ' ') {
                 handleCellClick(focused, focusedIdx);
                 return;
@@ -318,6 +451,22 @@
                 const idx = buttons.indexOf(btn);
                 await handleCellClick(btn, idx);
                 btn.focus();
+                return;
+            }
+
+            const assistBtn = e.target.closest('#assist-btn');
+            const newGameBtn = e.target.closest('#new-game-btn');
+            if (assistBtn || newGameBtn) {
+                if (isProcessing) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+                isProcessing = true;
+                if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                    await AudioEngine.ctx.resume().catch(console.warn);
+                }
+                await AudioEngine.init();
             }
         });
 
@@ -326,16 +475,29 @@
             let metadataChanged = false;
 
             for (const mutation of mutations) {
+                console.log(`Mutation observed: ${mutation.type}`, mutation.target);
+                let target = mutation.target;
+                if (mutation.type === 'characterData') {
+                    target = target.parentElement;
+                }
+
+                if (!target) continue;
+
                 if (mutation.type === 'childList' || mutation.type === 'characterData') {
                     // Check if mutation is within the board
-                    if (mutation.target.closest && mutation.target.closest('#board-container')) {
+                    if (target.closest && target.closest('#board-container')) {
                         boardChanged = true;
                     }
                     // Check if mutation is the metadata container
-                    if (mutation.target.id === 'move-metadata-container' ||
-                        (mutation.target.parentElement && mutation.target.parentElement.id === 'move-metadata-container')) {
+                    if (target.id === 'move-metadata-container' ||
+                        (target.parentElement && target.parentElement.id === 'move-metadata-container')) {
                         metadataChanged = true;
                     }
+                }
+
+                // Specifically watch data-payload attribute changes on move-metadata
+                if (mutation.type === 'attributes' && target.id === 'move-metadata' && mutation.attributeName === 'data-payload') {
+                    metadataChanged = true;
                 }
             }
 
@@ -355,11 +517,37 @@
         observer.observe(document.body, {
             childList: true,
             subtree: true,
-            characterData: true
-            // attributes: false to avoid loops
+            characterData: true,
+            attributes: true,
+            attributeFilter: ['data-payload']
         });
 
         window.setTimeout(updatePieceDataAttributes, 500);
+
+        // Safety reset for isProcessing in case of unexpected hangs
+        window.setInterval(() => {
+            if (isProcessing) {
+                console.warn("Safety reset: isProcessing was stuck.");
+                isProcessing = false;
+            }
+        }, 5000);
+
+        // Resume audio context on visibility change (tab back)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                AudioEngine.ctx.resume().catch(() => {});
+            }
+        });
+
+        // Global unlock on any interaction
+        const unlock = () => {
+            if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                AudioEngine.ctx.resume().catch(() => {});
+            }
+        };
+        document.addEventListener('click', unlock);
+        document.addEventListener('keydown', unlock);
+        document.addEventListener('touchstart', unlock);
     }
 
     hookKeyboardNav();

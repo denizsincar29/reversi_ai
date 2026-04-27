@@ -21,6 +21,8 @@ GR_MARKDOWN = load_asset("info.md")
 
 # ====== UI HELPERS ======
 
+import time
+
 def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
     if moves_metadata is None:
         moves_metadata = []
@@ -29,8 +31,12 @@ def _build_ui_payload(board: Board, status_text: str, moves_metadata=None):
     legal_html, _ = board.get_legal_moves_info(board.turn)
 
     # Use a div with data-attribute for more reliable JS access
-    # Use json.dumps twice to escape it properly for the HTML attribute
-    escaped_metadata = json.dumps(moves_metadata).replace("'", "&apos;")
+    # Include a timestamp to ensure the attribute always changes and triggers JS update
+    payload = {
+        "moves": moves_metadata,
+        "ts": time.time()
+    }
+    escaped_metadata = json.dumps(payload).replace("'", "&apos;")
     metadata_html = f"<div id='move-metadata' data-payload='{escaped_metadata}'></div>"
 
     return [
@@ -107,7 +113,9 @@ with gr.Blocks() as demo:
                     gr.HTML(f"<div class='edge-label row-label'>{r+1}</div>")
                     row_btns = []
                     for c in range(8):
-                        btn = gr.Button("empty", elem_classes=["board-cell"], min_width=50)
+                        # Initialize with coordinate for better SR support even before first update
+                        initial_label = f"{Board.coord_label(r, c)} empty"
+                        btn = gr.Button(initial_label, elem_classes=["board-cell"], min_width=50)
                         row_btns.append(btn)
                     buttons.append(row_btns)
                     # Row label right
@@ -125,8 +133,8 @@ with gr.Blocks() as demo:
             status = gr.Textbox(label="Status", value="", interactive=False)
             advantage_view = gr.HTML()
             legal_moves_view = gr.HTML()
-            play_assist_btn = gr.Button("AI Assistant Move", variant="primary")
-            new_btn = gr.Button("New Game")
+            play_assist_btn = gr.Button("AI Assistant Move", variant="primary", elem_id="assist-btn")
+            new_btn = gr.Button("New Game", elem_id="new-game-btn")
             gr.Markdown("### Accessibility\nHotkeys: Alt+A announces advantage, Alt+L announces legal moves. Use arrow keys to navigate the board.")
 
     sr_text = gr.Textbox(label="Screen Reader Announcements", lines=10, interactive=False, visible=False)
@@ -172,4 +180,7 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=["sounds"])
+    # Resolve sounds directory relative to the file location
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    sounds_path = os.path.join(base_dir, "sounds")
+    demo.launch(css=APP_CSS, js=APP_JS, allowed_paths=[sounds_path])
