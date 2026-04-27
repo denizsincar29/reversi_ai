@@ -73,20 +73,23 @@
         initPromise: null,
 
         async init() {
+            if (this.ctx && this.ctx.state === 'closed') {
+                this.ctx = null;
+                this.initPromise = null;
+            }
             if (this.initPromise) return this.initPromise;
 
             const doInit = async () => {
                 if (this.ctx) {
                     if (this.ctx.state === 'suspended') {
-                        await this.ctx.resume().catch(console.warn);
+                        await this.ctx.resume().catch(() => {});
                     }
                     return;
                 }
                 this.ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-                // Try to resume immediately
                 if (this.ctx.state === 'suspended') {
-                    await this.ctx.resume().catch(console.warn);
+                    this.ctx.resume().catch(() => {});
                 }
 
                 const loadPromises = this.sounds.map(async (sound) => {
@@ -128,30 +131,34 @@
         },
 
         async play(soundName, r, c) {
-            if (!this.ctx) await this.init();
-            if (!this.ctx || !this.buffers[soundName]) return;
+            try {
+                if (!this.ctx || this.ctx.state === 'closed') await this.init();
+                if (!this.ctx || !this.buffers[soundName]) return;
 
-            if (this.ctx.state === 'suspended') {
-                await this.ctx.resume().catch(console.warn);
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume().catch(() => {});
+                }
+
+                const source = this.ctx.createBufferSource();
+                source.buffer = this.buffers[soundName];
+
+                if (r !== undefined) {
+                    const targetFreq = this.BASE_FREQ + r * this.STEP;
+                    source.playbackRate.value = targetFreq / this.DEFAULT_SAMPLE_RATE;
+                }
+
+                const panner = this.ctx.createStereoPanner();
+                if (c !== undefined) {
+                    panner.pan.value = (2 * c / 7) - 1.0;
+                } else {
+                    panner.pan.value = 0;
+                }
+
+                source.connect(panner).connect(this.ctx.destination);
+                source.start();
+            } catch (e) {
+                console.error("Error playing sound", e);
             }
-
-            const source = this.ctx.createBufferSource();
-            source.buffer = this.buffers[soundName];
-
-            if (r !== undefined) {
-                const targetFreq = this.BASE_FREQ + r * this.STEP;
-                source.playbackRate.value = targetFreq / this.DEFAULT_SAMPLE_RATE;
-            }
-
-            const panner = this.ctx.createStereoPanner();
-            if (c !== undefined) {
-                panner.pan.value = (2 * c / 7) - 1.0;
-            } else {
-                panner.pan.value = 0;
-            }
-
-            source.connect(panner).connect(this.ctx.destination);
-            source.start();
         },
 
         async playMoveSequence(player, r, c, flips) {
@@ -175,6 +182,7 @@
     let humanColor = 'B';
     let isProcessing = false;
     let localErrorPlayed = false;
+    let lastProcessedTs = 0;
 
     function syncFromUI() {
         const buttons = getBoardButtons();
@@ -245,16 +253,20 @@
 
     async function handleCellClick(btn, index) {
         if (isProcessing) return;
+
+        // Resume on every click to keep it alive
         if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
-            await AudioEngine.ctx.resume().catch(console.warn);
+            AudioEngine.ctx.resume().catch(console.warn);
         }
         await AudioEngine.init();
 
         const r = Math.floor(index / SIZE);
         const c = index % SIZE;
 
+        // Block UI immediately to wait for Gradio sync
+        isProcessing = true;
+
         if (Reversi.isValidMove(localGrid, humanColor, r, c)) {
-            isProcessing = true;
             localErrorPlayed = false;
             const result = Reversi.applyMove(localGrid, humanColor, r, c);
             localGrid = result.grid;
@@ -275,6 +287,8 @@
             // Set flag BEFORE playing to prevent race with incoming metadata
             localErrorPlayed = true;
             await AudioEngine.play('error.wav', r, c);
+        } else {
+            isProcessing = false;
         }
     }
 
@@ -287,14 +301,17 @@
             return;
         }
 
+        if (payload.ts && payload.ts <= lastProcessedTs) return;
+        lastProcessedTs = payload.ts || 0;
+
         const moves = payload.moves || [];
 
         try {
             // Replay moves sequentially
             for (const move of moves) {
                 if (move.type === 'move') {
-                    // Only play AI moves or our move if we haven't played it optimistically
-                    // (Actually AI will always be different player, unless assistant)
+                    // Skip if it's our move and we already played it optimistically
+                    // But if it's AI or assistant move, we play it.
                     if (move.player !== humanColor || !isProcessing) {
                         await AudioEngine.playMoveSequence(move.player, move.r, move.c, move.flips);
                         await new Promise(resolve => setTimeout(resolve, 300));
@@ -303,10 +320,11 @@
                     await AudioEngine.play('pass.wav');
                     await new Promise(resolve => setTimeout(resolve, 600));
                 } else if (move.type === 'error' && move.player === humanColor) {
+                    // Error sound is already handled optimistically in handleCellClick.
+                    // We only play it here if we somehow didn't catch it locally.
                     if (!localErrorPlayed) {
                         await AudioEngine.play('error.wav', move.coords[0], move.coords[1]);
                     }
-                    // Reset error flag after checking
                     localErrorPlayed = false;
                 }
             }
@@ -453,6 +471,31 @@
         });
 
         window.setTimeout(updatePieceDataAttributes, 500);
+
+        // Safety reset for isProcessing in case of unexpected hangs
+        window.setInterval(() => {
+            if (isProcessing) {
+                console.warn("Safety reset: isProcessing was stuck.");
+                isProcessing = false;
+            }
+        }, 20000);
+
+        // Resume audio context on visibility change (tab back)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                AudioEngine.ctx.resume().catch(() => {});
+            }
+        });
+
+        // Global unlock on any interaction
+        const unlock = () => {
+            if (AudioEngine.ctx && AudioEngine.ctx.state === 'suspended') {
+                AudioEngine.ctx.resume().catch(() => {});
+            }
+        };
+        document.addEventListener('click', unlock);
+        document.addEventListener('keydown', unlock);
+        document.addEventListener('touchstart', unlock);
     }
 
     hookKeyboardNav();
