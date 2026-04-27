@@ -383,11 +383,6 @@ APP_JS = """
 })();
 """
 
-with gr.Blocks() as demo:
-
-    state = gr.State(Board())
-    status_state = gr.State("")
-
 gr_markdown = """
 # Reversi with Audio-First UI
 This is a Reversi (Othello) game built with an audio-first user interface, designed for accessibility and screen reader users. The game features:
@@ -409,8 +404,13 @@ For example, if you have the 3rd row starting with black, than 4 whites, than em
 - Use Alt+A to have the screen reader announce the current advantage (who is winning and by how much).
 - Use Alt+L to have the screen reader announce the legal moves available for black.
 """
+with gr.Blocks() as demo:
 
-    gr.Markdown("## Reversi (audio-first UI)")
+    state = gr.State(Board())
+    status_state = gr.State("")
+
+
+    gr.Markdown(gr_markdown)
 
     with gr.Accordion("Settings", open=True):
         alphabeta_depth = gr.Slider(
